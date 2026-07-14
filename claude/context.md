@@ -79,6 +79,9 @@ src/
 
 ## Convenções
 
+- Workflow de feature: spec em `docs/specs/` antes do código, TDD
+  inside-out (unit-first) no domínio, e2e depois como rede de
+  segurança. Detalhado em [`docs/workflow.md`](../docs/workflow.md).
 - Commits: conventional commits (`feat:`, `fix:`, `refactor:`, etc.)
 - Branches: `feature/nome-curto`, merge via PR mesmo trabalhando sozinho
   (prática de portfólio)

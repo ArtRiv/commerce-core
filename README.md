@@ -28,6 +28,7 @@ v1 pequena, testada e em produção antes de expandir.
 - Deploy real — critério de sucesso da v1
 
 Mais detalhes de escopo, convenções e roadmap em [`claude/context.md`](claude/context.md).
+Arquitetura (diagramas Mermaid) e o workflow de spec + TDD ficam em [`docs/`](docs/).
 
 ## Rodando o projeto
 
