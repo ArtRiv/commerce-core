@@ -6,6 +6,9 @@ convenções combinadas para trabalhar com o Claude Code neste repo.
 
 - [`workflow.md`](workflow.md) — como uma feature nasce aqui: spec →
   TDD → e2e → docs de arquitetura atualizados.
+- [`security.md`](security.md) — padrões de segurança adotados no
+  projeto (senha, tokens, rate limiting), com base no OWASP Cheat
+  Sheet Series. Vale pro projeto inteiro, não só pro auth.
 - [`specs/`](specs/) — specs por módulo/feature, escritas _antes_ da
   implementação. `TEMPLATE.md` é o ponto de partida.
 - [`architecture/`](architecture/) — diagramas Mermaid da arquitetura

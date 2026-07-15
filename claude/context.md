@@ -82,6 +82,10 @@ src/
 - Workflow de feature: spec em `docs/specs/` antes do código, TDD
   inside-out (unit-first) no domínio, e2e depois como rede de
   segurança. Detalhado em [`docs/workflow.md`](../docs/workflow.md).
+- Padrões de segurança (senha, tokens, rate limiting) seguem OWASP e
+  estão registrados em [`docs/security.md`](../docs/security.md) —
+  qualquer spec nova que lide com credencial ou dado sensível segue
+  esse documento em vez de redecidir do zero.
 - Commits: conventional commits (`feat:`, `fix:`, `refactor:`, etc.)
 - Branches: `feature/nome-curto`, merge via PR mesmo trabalhando sozinho
   (prática de portfólio)
