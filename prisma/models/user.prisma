@@ -4,10 +4,19 @@ model User {
   email String  @unique
   name  String?
 
-  passwordHash String @map("password_hash")
+  /// Null until the address is proven. Login by password requires it set;
+  /// Google login sets it on the spot, since Google already proved ownership.
+  emailVerifiedAt DateTime? @map("email_verified_at")
+
+  /// Optional: an account created through Google never set a password.
+  /// Password login against such an account must fail with the same generic
+  /// error as a wrong password — see docs/specs/auth.md.
+  passwordHash String? @map("password_hash")
 
   roleId String @map("role_id")
   role   Role   @relation(fields: [roleId], references: [id])
+
+  refreshTokens RefreshToken[]
 
   permissionsGrantedToUser UserPermission[] @relation("PermissionAssignee")
   permissionsGrantedByUser UserPermission[] @relation("PermissionGranter")
