@@ -1,7 +1,8 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, UnauthorizedException } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 
+import { AuthService } from '../src/auth/auth.service';
 import { PasswordService } from '../src/auth/password.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './support/app';
@@ -547,6 +548,134 @@ describe('Auth (e2e)', () => {
         .post('/auth/refresh')
         .send({ refreshToken: laptop.refreshToken })
         .expect(200);
+    });
+  });
+
+  describe('Google sign-in', () => {
+    // Not an HTTP test: completing a real OAuth round trip needs Google. But
+    // the acceptance criteria here are claims about rows — "no duplicate
+    // account is created", "the existing account is linked" — and a mocked
+    // Prisma cannot falsify those, the same reasoning that put refresh-token
+    // replay in this file. So the service is driven directly against the real
+    // database, standing in for what the callback would hand it.
+    let auth: AuthService;
+
+    const profile = {
+      googleId: 'google-sub-123',
+      email: EMAIL,
+      name: 'Ada',
+      emailVerified: true,
+    };
+
+    beforeAll(() => {
+      auth = app.get(AuthService);
+    });
+
+    it('creates a verified, passwordless account for a new user', async () => {
+      const tokens = await auth.loginWithGoogle(profile);
+      expect(tokens.accessToken).toBeTruthy();
+
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { email: EMAIL },
+        select: {
+          googleId: true,
+          passwordHash: true,
+          emailVerifiedAt: true,
+          role: { select: { name: true } },
+        },
+      });
+
+      expect(user.googleId).toBe('google-sub-123');
+      expect(user.passwordHash).toBeNull();
+      expect(user.emailVerifiedAt).not.toBeNull();
+      expect(user.role.name).toBe('customer');
+    });
+
+    it('links onto an account registered with a password, without duplicating it', async () => {
+      await seedVerifiedUser();
+
+      await auth.loginWithGoogle(profile);
+
+      const users = await prisma.user.findMany({
+        select: { id: true, googleId: true, passwordHash: true },
+      });
+
+      // One row, both credentials. The unique index on email would have thrown
+      // on a second insert anyway — that it did not is the point.
+      expect(users).toHaveLength(1);
+      expect(users[0].googleId).toBe('google-sub-123');
+      expect(users[0].passwordHash).not.toBeNull();
+    });
+
+    it('leaves the password login working after linking', async () => {
+      await seedVerifiedUser();
+      await auth.loginWithGoogle(profile);
+
+      // Linking adds a way in; it must not take one away.
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(200);
+    });
+
+    it('signs the same Google user in repeatedly without duplicating', async () => {
+      await auth.loginWithGoogle(profile);
+      await auth.loginWithGoogle(profile);
+
+      expect(await prisma.user.count()).toBe(1);
+    });
+
+    it('verifies an account that never confirmed its address', async () => {
+      await http()
+        .post('/auth/register')
+        .send({ email: EMAIL, password: PASSWORD, name: 'Ada' })
+        .expect(201);
+
+      await auth.loginWithGoogle(profile);
+
+      // Registered, never clicked the link, signed in with Google instead.
+      // Google proved the address, so password login now works too.
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(200);
+    });
+
+    it('refuses a profile whose address Google did not verify', async () => {
+      await expect(
+        auth.loginWithGoogle({ ...profile, emailVerified: false }),
+      ).rejects.toThrow(UnauthorizedException);
+
+      expect(await prisma.user.count()).toBe(0);
+    });
+
+    it('will not let an unverified Google profile seize an existing account', async () => {
+      await seedVerifiedUser();
+
+      // The attack the emailVerified check exists to stop: put a victim's
+      // address on a Google account, leave it unverified, sign in, inherit
+      // their account.
+      await expect(
+        auth.loginWithGoogle({ ...profile, emailVerified: false }),
+      ).rejects.toThrow(UnauthorizedException);
+
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { email: EMAIL },
+        select: { googleId: true },
+      });
+      expect(user.googleId).toBeNull();
+    });
+
+    it('exposes the OAuth routes rather than 404ing them', async () => {
+      // Deliberately not asserting the status: it depends on whether this
+      // environment has Google credentials — 503 without, a redirect to Google
+      // with. Pinning either would make the test a report on someone's .env.
+      // That the route is mounted at all is the environment-independent claim;
+      // GoogleOAuthGuard's own spec covers the unconfigured branch.
+      const response = await http().get('/auth/google');
+
+      expect(response.status).not.toBe(404);
+      expect([503, 302]).toContain(response.status);
     });
   });
 

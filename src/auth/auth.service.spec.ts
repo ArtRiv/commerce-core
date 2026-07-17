@@ -30,15 +30,23 @@ interface UserFindArgs {
 interface UserCreateArgs {
   data: {
     email: string;
-    name: string;
-    passwordHash: string;
+    name: string | null;
     roleId: string;
+    // Optional: a Google account arrives with no password but a googleId and a
+    // verification date, a registered one with the reverse.
+    passwordHash?: string;
+    googleId?: string;
+    emailVerifiedAt?: Date;
   };
 }
 
 interface UserUpdateArgs {
   where: { id: string };
-  data: { emailVerifiedAt?: Date; passwordHash?: string };
+  data: {
+    emailVerifiedAt?: Date | null;
+    passwordHash?: string;
+    googleId?: string;
+  };
 }
 
 interface RoleFindArgs {
@@ -515,6 +523,140 @@ describe('AuthService', () => {
       );
       expect(prisma.user.update).not.toHaveBeenCalled();
       expect(refreshTokens.revokeAllSessions).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('loginWithGoogle', () => {
+    const profile = {
+      googleId: 'google-sub-123',
+      email: EMAIL,
+      name: 'Ada',
+      emailVerified: true,
+    };
+
+    it('creates a verified, passwordless account for a new user', async () => {
+      const { service, prisma } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await service.loginWithGoogle(profile);
+
+      const [{ data }] = prisma.user.create.mock.calls[0];
+      expect(data.googleId).toBe('google-sub-123');
+      expect(data.roleId).toBe('role-customer');
+      // Verified on the spot: Google's assertion is what our own verification
+      // email would have proven. And no password was ever set.
+      expect(data.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(data.passwordHash).toBeUndefined();
+    });
+
+    it('links to an existing account with the same address, creating nothing', async () => {
+      const { service, prisma } = createMocks();
+      prisma.user.findUnique
+        .mockResolvedValueOnce(null) // by googleId
+        .mockResolvedValueOnce({
+          id: 'user-1',
+          email: EMAIL,
+          passwordHash: '$argon2id$…',
+          emailVerifiedAt: new Date('2020-01-01'),
+        });
+
+      await service.loginWithGoogle(profile);
+
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      const [update] = prisma.user.update.mock.calls[0];
+      expect(update.where.id).toBe('user-1');
+      expect(update.data.googleId).toBe('google-sub-123');
+    });
+
+    it('keeps the original verification date when linking', async () => {
+      const { service, prisma } = createMocks();
+      const verifiedAt = new Date('2020-01-01');
+      prisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        id: 'user-1',
+        email: EMAIL,
+        passwordHash: '$argon2id$…',
+        emailVerifiedAt: verifiedAt,
+      });
+
+      await service.loginWithGoogle(profile);
+
+      const [update] = prisma.user.update.mock.calls[0];
+      expect(update.data.emailVerifiedAt).toEqual(verifiedAt);
+    });
+
+    it('verifies an unverified account it links to', async () => {
+      const { service, prisma } = createMocks();
+      prisma.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        id: 'user-1',
+        email: EMAIL,
+        passwordHash: '$argon2id$…',
+        emailVerifiedAt: null,
+      });
+
+      await service.loginWithGoogle(profile);
+
+      // Registered with a password, never clicked the link, then signed in with
+      // Google instead. Google proved the address, so the pending verification
+      // is satisfied.
+      const [update] = prisma.user.update.mock.calls[0];
+      expect(update.data.emailVerifiedAt).toBeInstanceOf(Date);
+    });
+
+    it('matches on the google id before the address', async () => {
+      const { service, prisma } = createMocks();
+      prisma.user.findUnique.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'changed@example.com',
+        passwordHash: null,
+        emailVerifiedAt: new Date(),
+      });
+
+      await service.loginWithGoogle(profile);
+
+      // The subject id is stable; an address can be reassigned to someone else
+      // by whoever owns the domain. Found by id, so no link and no create.
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      const [lookup] = prisma.user.findUnique.mock.calls[0];
+      expect(lookup.where).toEqual({ googleId: 'google-sub-123' });
+    });
+
+    // The security boundary of the entire feature. The auto-link is only safe
+    // because Google asserts this person owns this mailbox — that assertion is
+    // what stands in for our own verification email. Google returns unverified
+    // addresses for some Workspace setups; trusting one would let anyone who
+    // can put a victim's address on a Google account seize the matching
+    // account here.
+    it('refuses a profile whose email Google did not verify', async () => {
+      const { service, prisma } = createMocks();
+
+      await expect(
+        service.loginWithGoogle({ ...profile, emailVerified: false }),
+      ).rejects.toThrow(UnauthorizedException);
+
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('lowercases the address before matching', async () => {
+      const { service, prisma } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await service.loginWithGoogle({ ...profile, email: 'Ada@Example.COM' });
+
+      const [, byEmail] = prisma.user.findUnique.mock.calls;
+      expect(byEmail[0].where).toEqual({ email: EMAIL });
+    });
+
+    it('returns a token pair', async () => {
+      const { service, prisma } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      expect(await service.loginWithGoogle(profile)).toEqual({
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      });
     });
   });
 

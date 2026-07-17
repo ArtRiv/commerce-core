@@ -1,14 +1,21 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import type { Request } from 'express';
 
-import { AuthService, type RegisteredUser } from './auth.service';
+import {
+  AuthService,
+  type GoogleProfile,
+  type RegisteredUser,
+} from './auth.service';
 import type { AuthenticatedUser } from './authenticated-user';
 import { CurrentUser } from './current-user.decorator';
 import { EmailDto } from './dto/email.dto';
@@ -17,6 +24,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { GoogleOAuthGuard } from './google-oauth.guard';
 import { Public } from './public.decorator';
 import { EmailThrottlerGuard } from './throttling/email-throttler.guard';
 import { RATE_LIMITS } from './throttling/rate-limits';
@@ -78,6 +86,29 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
     return this.auth.resetPassword(dto.token, dto.newPassword);
+  }
+
+  /**
+   * Kicks off the OAuth flow. The guard redirects to Google; this handler is
+   * never actually entered.
+   */
+  @Public()
+  @UseGuards(GoogleOAuthGuard)
+  @Get('google')
+  google(): void {
+    // Intentionally empty.
+  }
+
+  /**
+   * Where Google sends the user back. The guard has already exchanged the code
+   * and run GoogleStrategy.validate by the time this runs, so `user` is the
+   * profile it produced — not an AuthenticatedUser.
+   */
+  @Public()
+  @UseGuards(GoogleOAuthGuard)
+  @Get('google/callback')
+  googleCallback(@Req() req: Request): Promise<TokenPair> {
+    return this.auth.loginWithGoogle(req.user as GoogleProfile);
   }
 
   /**

@@ -13,6 +13,11 @@ model User {
   /// error as a wrong password — see docs/specs/auth.md.
   passwordHash String? @map("password_hash")
 
+  /// Google's subject id, set when an account signs in with Google or gets
+  /// auto-linked to one. Unique, and matched on before email: it is stable,
+  /// whereas an address can be reassigned by its domain owner.
+  googleId String? @unique @map("google_id")
+
   roleId String @map("role_id")
   role   Role   @relation(fields: [roleId], references: [id])
 

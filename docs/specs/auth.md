@@ -2,21 +2,31 @@
 
 ## Status
 
-`em implementação`
+`implementado`
 
-Entrega em fases. **Fase 1** (feita): loop core de e-mail/senha —
-registro, login, refresh, logout. **Fase 2** (feita): verificação de
-e-mail via Resend, reset de senha e rate limiting — o fluxo
-`registro → verificar → login` fecha inteiro pela API agora, sem ninguém
-tocar no banco. **Falta**: só Google OAuth.
+Entregue em três fases. **Fase 1**: loop core de e-mail/senha — registro,
+login, refresh, logout. **Fase 2**: verificação de e-mail via Resend,
+reset de senha e rate limiting — o fluxo `registro → verificar → login`
+fecha inteiro pela API, sem ninguém tocar no banco. **Fase 3**: Google
+OAuth com auto-link.
 
-A spec inteira fica aqui desde já — o que muda por fase é só quais
-critérios de aceitação estão marcados.
+Todos os critérios de aceitação estão marcados, menos um: o de RBAC
+(403 numa rota protegida), que só dá pra fechar quando existir uma rota
+protegida — nenhum módulo de domínio nasceu ainda. A lógica do guard tem
+teste unitário.
 
-Ainda não coberto por teste: `ResendMailService`. O e2e troca o provedor
-por um fake (senão a suíte mandaria e-mail de verdade, e o app nem subiria
-sem `RESEND_API_KEY`). Tudo até a fronteira do provedor é testado; a
-chamada pro Resend em si, não.
+### Buracos de cobertura conhecidos
+
+- `ResendMailService`: o e2e troca o provedor por um fake (senão a suíte
+  mandaria e-mail de verdade, e o app nem subiria sem `RESEND_API_KEY`).
+  Tudo até a fronteira do provedor é testado; a chamada pro Resend, não.
+- O round-trip OAuth do Google: completar de verdade exige o Google. A
+  `GoogleStrategy` (mapear profile → `GoogleProfile`) e o resto do fluxo
+  não têm teste de ponta a ponta. O que **tem** teste é o que importa —
+  o auto-link é exercido contra o banco real chamando o
+  `AuthService.loginWithGoogle` direto, porque os critérios de aceitação
+  ali são afirmações sobre linhas ("nenhuma conta duplicada"), e mock de
+  Prisma não falsifica isso.
 
 ## Objetivo
 
@@ -61,8 +71,24 @@ token JWT de vida curta + refresh token rotativo de uso único.
   login usa — ligados pelo e-mail.
 - Login por e-mail/senha só é permitido se a conta tiver e-mail
   verificado (`emailVerifiedAt IS NOT NULL`).
-- Login via Google não passa pela verificação de e-mail: o Google já
-  garante a posse.
+- Login via Google não passa pela verificação de e-mail — mas **só**
+  quando o Google afirma `email_verified`. Esse campo é a fronteira de
+  segurança do auto-link inteiro, não formalidade: é a afirmação do
+  Google que substitui o nosso e-mail de verificação. O Google devolve
+  endereço não-verificado em algumas configurações de Workspace, e
+  aceitar um significaria que qualquer um que consiga pôr o e-mail da
+  vítima numa conta Google assume a conta daqui. Sem a afirmação, o
+  login é recusado.
+- Auto-link casa por `googleId` primeiro, e-mail depois: o subject id do
+  Google é estável, enquanto um endereço pode ser reatribuído a outra
+  pessoa por quem controla o domínio.
+- Conta local ainda não verificada que loga via Google passa a
+  verificada — o Google acabou de provar a posse. Se já era verificada,
+  a data original é mantida.
+- Google é configuração **opcional** (ao contrário do Resend): sem
+  `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` o app sobe normalmente e as
+  rotas do Google respondem 503. A `GoogleStrategy` só é registrada
+  quando as duas variáveis existem.
 - Role no registro é sempre a role marcada `isDefault` no banco
   (`customer`). `operator`/`admin` só são atribuídos por ação
   administrativa — nunca escolhido pelo próprio usuário no fluxo de
@@ -187,7 +213,9 @@ class ResetPasswordDto {
 | ---------------- | -------------------------------------------- |
 | `RESEND_API_KEY` | Envio de e-mail. Sem ela o app não sobe.     |
 | `MAIL_FROM`      | Remetente dos e-mails (domínio verificado no Resend). |
-| `APP_URL`        | Base dos links de verificação/reset.         |
+| `APP_URL`        | Base dos links de verificação/reset e do callback do Google. |
+| `GOOGLE_CLIENT_ID`     | Login com Google. Opcional — sem ela as rotas do Google dão 503. |
+| `GOOGLE_CLIENT_SECRET` | Idem.                                    |
 
 ## Critérios de aceitação
 
@@ -210,10 +238,10 @@ código.
 - [x] Dado um e-mail verificado e senha errada, quando faço login,
       então recebo erro, sem indicar se o problema foi o e-mail ou a
       senha (não vazar qual dos dois está errado).
-- [ ] Dado um usuário que nunca logou, quando completa o fluxo do
+- [x] Dado um usuário que nunca logou, quando completa o fluxo do
       Google OAuth, então uma conta nova é criada com e-mail já
-      verificado (`emailVerifiedAt` = data do login) e role `cliente`.
-- [ ] Dado um usuário já cadastrado por e-mail/senha, quando completa
+      verificado (`emailVerifiedAt` = data do login) e role `customer`.
+- [x] Dado um usuário já cadastrado por e-mail/senha, quando completa
       o fluxo do Google OAuth com o mesmo e-mail, então nenhuma conta
       duplicada é criada — a conta existente é vinculada.
 - [x] Dado um refresh token válido e não usado, quando chamo

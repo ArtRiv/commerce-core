@@ -23,6 +23,15 @@ export interface RegisteredUser {
   email: string;
 }
 
+/** What GoogleStrategy hands over once Google has vouched for the user. */
+export interface GoogleProfile {
+  googleId: string;
+  email: string;
+  name: string | null;
+  /** Google's own `email_verified`. Load-bearing — see `loginWithGoogle`. */
+  emailVerified: boolean;
+}
+
 /**
  * Addresses are matched case-insensitively. Postgres unique indexes are not,
  * so without this "Ada@example.com" and "ada@example.com" would be two accounts
@@ -204,12 +213,85 @@ export class AuthService {
       throw new ForbiddenException('Verify your email before signing in');
     }
 
-    const [accessToken, refreshToken] = await Promise.all([
-      this.signAccessToken(user.id),
-      this.refreshTokens.issueForNewSession(user.id),
-    ]);
+    return this.issueTokensFor(user.id);
+  }
 
-    return { accessToken, refreshToken };
+  /**
+   * Signs in through Google, creating or linking an account as needed.
+   *
+   * `emailVerified` is the security boundary of this whole feature, not a
+   * formality. The auto-link is only safe because Google is asserting that this
+   * person owns this mailbox — that assertion is what substitutes for our own
+   * verification email. Google will hand back unverified addresses for some
+   * Workspace configurations, and taking one at face value would mean anyone
+   * able to put a victim's address on a Google account could claim the matching
+   * account here. Without the assertion there is nothing to link on, so the
+   * sign-in is refused rather than guessed at.
+   *
+   * Matched on googleId first, email second: the subject id is stable, while an
+   * address can be reassigned to a different person by whoever owns the domain.
+   */
+  async loginWithGoogle(profile: GoogleProfile): Promise<TokenPair> {
+    if (!profile.emailVerified) {
+      throw new UnauthorizedException(
+        'Google did not verify this email address',
+      );
+    }
+
+    const email = normalizeEmail(profile.email);
+
+    const linked = await this.prisma.user.findUnique({
+      where: { googleId: profile.googleId },
+      select: { id: true },
+    });
+
+    if (linked) {
+      return this.issueTokensFor(linked.id);
+    }
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, emailVerifiedAt: true },
+    });
+
+    if (existing) {
+      await this.prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          googleId: profile.googleId,
+          // Google just proved ownership, so an address still waiting on our
+          // own verification email is now verified. Kept if already set, so the
+          // original verification date is not rewritten.
+          emailVerifiedAt: existing.emailVerifiedAt ?? new Date(),
+        },
+      });
+
+      return this.issueTokensFor(existing.id);
+    }
+
+    const role = await this.prisma.role.findFirst({
+      where: { isDefault: true },
+      select: { id: true },
+    });
+
+    if (!role) {
+      throw new Error('No default role configured — did the seed run?');
+    }
+
+    // No passwordHash: this account has never had one. Verified on the spot —
+    // Google's assertion is what our own verification email would have proven.
+    const created = await this.prisma.user.create({
+      data: {
+        email,
+        name: profile.name,
+        googleId: profile.googleId,
+        roleId: role.id,
+        emailVerifiedAt: new Date(),
+      },
+      select: { id: true },
+    });
+
+    return this.issueTokensFor(created.id);
   }
 
   async refresh(presented: string): Promise<TokenPair> {
@@ -256,6 +338,16 @@ export class AuthService {
         }`,
       );
     }
+  }
+
+  /** Starts a new session: a fresh access token and a new token family. */
+  private async issueTokensFor(userId: string): Promise<TokenPair> {
+    const [accessToken, refreshToken] = await Promise.all([
+      this.signAccessToken(userId),
+      this.refreshTokens.issueForNewSession(userId),
+    ]);
+
+    return { accessToken, refreshToken };
   }
 
   /** Identity only — see docs/specs/auth.md on why no role rides along. */

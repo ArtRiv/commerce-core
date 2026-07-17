@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
@@ -10,8 +10,28 @@ import { PermissionsGuard } from './authz/permissions.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { PasswordService } from './password.service';
 import { RefreshTokenService } from './refresh-token.service';
+import {
+  GoogleStrategy,
+  isGoogleConfigured,
+} from './strategies/google.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { VerificationTokenService } from './verification-token.service';
+
+/**
+ * Registers GoogleStrategy only where Google sign-in is actually configured.
+ *
+ * Constructing it demands GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, so an
+ * unconditional provider would stop the app — and the test suite — from booting
+ * anywhere those are absent. A passport strategy registers itself on
+ * construction, so skipping construction leaves it unregistered, and
+ * GoogleOAuthGuard answers 503 on the routes that would need it.
+ */
+const googleStrategyProvider: Provider = {
+  provide: GoogleStrategy,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService): GoogleStrategy | null =>
+    isGoogleConfigured(config) ? new GoogleStrategy(config) : null,
+};
 
 const DEFAULT_ACCESS_TOKEN_TTL = '15m';
 
@@ -43,6 +63,7 @@ const DEFAULT_ACCESS_TOKEN_TTL = '15m';
     RefreshTokenService,
     VerificationTokenService,
     JwtStrategy,
+    googleStrategyProvider,
     // Order matters: Nest runs global guards in registration order, so
     // authentication populates request.user before authorization reads it.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
