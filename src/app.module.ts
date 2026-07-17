@@ -1,6 +1,7 @@
 import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_PIPE } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -11,6 +12,12 @@ import { PrismaModule } from './prisma/prisma.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // A baseline for any route that opts in with @UseGuards(ThrottlerGuard);
+    // the sensitive routes override it with their own @Throttle. Storage is
+    // in-memory, which means each instance counts on its own — fine for one
+    // process, wrong the day this runs behind more than one. Swapping in the
+    // Redis storage is a change here and nowhere else.
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
     PrismaModule,
     MailModule,
     AuthModule,

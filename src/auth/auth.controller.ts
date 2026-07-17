@@ -1,4 +1,12 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 
 import { AuthService, type RegisteredUser } from './auth.service';
 import type { AuthenticatedUser } from './authenticated-user';
@@ -10,6 +18,8 @@ import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { Public } from './public.decorator';
+import { EmailThrottlerGuard } from './throttling/email-throttler.guard';
+import { RATE_LIMITS } from './throttling/rate-limits';
 import type { TokenPair } from './token-pair';
 
 @Controller('auth')
@@ -17,6 +27,8 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.REGISTER })
   @Post('register')
   register(@Body() dto: RegisterDto): Promise<RegisteredUser> {
     return this.auth.register(dto);
@@ -34,6 +46,8 @@ export class AuthController {
    * the address is registered — see docs/security.md.
    */
   @Public()
+  @UseGuards(EmailThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.EMAIL_DISPATCH })
   @Post('resend-verification')
   @HttpCode(HttpStatus.NO_CONTENT)
   resendVerification(@Body() dto: EmailDto): Promise<void> {
@@ -41,6 +55,8 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(ThrottlerGuard, EmailThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.LOGIN })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto): Promise<TokenPair> {
@@ -49,6 +65,8 @@ export class AuthController {
 
   /** Always 204, for the same reason as resend-verification. */
   @Public()
+  @UseGuards(EmailThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.EMAIL_DISPATCH })
   @Post('forgot-password')
   @HttpCode(HttpStatus.NO_CONTENT)
   forgotPassword(@Body() dto: EmailDto): Promise<void> {
@@ -67,6 +85,8 @@ export class AuthController {
    * access token has usually expired by the time they need this.
    */
   @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.REFRESH })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   refresh(@Body() dto: RefreshTokenDto): Promise<TokenPair> {

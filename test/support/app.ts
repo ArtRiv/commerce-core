@@ -1,5 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { ThrottlerStorage } from '@nestjs/throttler';
+import type { ThrottlerStorageService } from '@nestjs/throttler/dist/throttler.service';
 import type { App } from 'supertest/types';
 
 import { AppModule } from '../../src/app.module';
@@ -11,6 +13,15 @@ export interface TestApp {
   app: INestApplication<App>;
   prisma: PrismaService;
   mail: FakeMailService;
+  /**
+   * Forgets every rate-limit counter.
+   *
+   * Every test calls from the same loopback address, so without this the
+   * budgets leak across cases and a test fails because of what the previous one
+   * did. Resetting beats raising the limits for tests: the real numbers stay
+   * under test, including the 429.
+   */
+  resetRateLimits: () => void;
 }
 
 /**
@@ -38,5 +49,14 @@ export async function createTestApp(): Promise<TestApp> {
   const app = moduleFixture.createNestApplication<INestApplication<App>>();
   await app.init();
 
-  return { app, prisma: app.get(PrismaService), mail };
+  const storage = app.get<ThrottlerStorageService>(ThrottlerStorage);
+
+  return {
+    app,
+    prisma: app.get(PrismaService),
+    mail,
+    resetRateLimits: () => {
+      storage.storage.clear();
+    },
+  };
 }

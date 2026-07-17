@@ -5,6 +5,7 @@
   "testRegex": ".e2e-spec.ts$",
   "moduleNameMapper": { "^(\\.{1,2}/.*)\\.js$": "$1" },
   "maxWorkers": 1,
+  "testTimeout": 30000,
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   }

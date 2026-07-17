@@ -6,9 +6,9 @@
 
 Entrega em fases. **Fase 1** (feita): loop core de e-mail/senha —
 registro, login, refresh, logout. **Fase 2** (feita): verificação de
-e-mail via Resend e reset de senha — o fluxo `registro → verificar →
-login` fecha inteiro pela API agora, sem ninguém tocar no banco.
-**Falta**: Google OAuth e rate limiting.
+e-mail via Resend, reset de senha e rate limiting — o fluxo
+`registro → verificar → login` fecha inteiro pela API agora, sem ninguém
+tocar no banco. **Falta**: só Google OAuth.
 
 A spec inteira fica aqui desde já — o que muda por fase é só quais
 critérios de aceitação estão marcados.
@@ -108,10 +108,23 @@ token JWT de vida curta + refresh token rotativo de uso único.
 - Trocar a senha (via reset) invalida todas as sessões existentes do
   usuário — todas as famílias de refresh token são revogadas, não só
   a atual.
-- Rate limit nas rotas sensíveis (defaults, ajustáveis): login 5
-  tentativas / 15 min (por IP + por conta); registro 5 / hora por IP;
-  forgot-password 3 / hora por e-mail (evita usar o endpoint pra
-  floodar a caixa de entrada de terceiros).
+- Rate limit nas rotas sensíveis (defaults, ajustáveis, todos em
+  `src/auth/throttling/rate-limits.ts`): login 5 tentativas / 15 min
+  (por IP **e** por conta); registro 5 / hora por IP; forgot-password
+  **e resend-verification** 3 / hora por e-mail (evita usar o endpoint
+  pra floodar a caixa de entrada de terceiros); refresh 30 / 15 min por
+  IP.
+- `resend-verification` não estava na lista original da spec, mas
+  dispara e-mail pra terceiro igual ao forgot-password — mesmo vetor de
+  abuso, mesmo limite. O princípio em [`docs/security.md`](../security.md)
+  já mandava isso; a lista é que estava incompleta.
+- Limitar por e-mail além de IP porque IP sozinho é a chave errada:
+  atacante com pool de proxies ganha orçamento novo por endereço,
+  enquanto um escritório atrás de um NAT divide um orçamento entre
+  todos. A chave certa é a conta sendo atacada.
+- Contador de rate limit é em memória: cada instância conta a sua. Certo
+  pra um processo, errado no dia que rodar em mais de um — trocar pro
+  storage de Redis é mudança só no `AppModule`.
 
 ## Superfície da API
 
@@ -229,7 +242,7 @@ código.
 - [x] Dado um token de reset expirado ou já usado, quando chamo
       `/auth/reset-password`, então a operação falha sem alterar a
       senha.
-- [ ] Dado mais de 5 tentativas de login falhas em 15 min pra mesma
+- [x] Dado mais de 5 tentativas de login falhas em 15 min pra mesma
       conta, quando tento logar de novo, então recebo 429 mesmo com a
       senha correta.
 

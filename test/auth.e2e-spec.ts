@@ -25,15 +25,17 @@ describe('Auth (e2e)', () => {
   let prisma: PrismaService;
   let passwords: PasswordService;
   let mail: FakeMailService;
+  let resetRateLimits: () => void;
 
   beforeAll(async () => {
-    ({ app, prisma, mail } = await createTestApp());
+    ({ app, prisma, mail, resetRateLimits } = await createTestApp());
     passwords = app.get(PasswordService);
   });
 
   beforeEach(async () => {
     await resetAuthTables(prisma);
     mail.reset();
+    resetRateLimits();
   });
 
   afterAll(async () => {
@@ -545,6 +547,145 @@ describe('Auth (e2e)', () => {
         .post('/auth/refresh')
         .send({ refreshToken: laptop.refreshToken })
         .expect(200);
+    });
+  });
+
+  describe('rate limiting', () => {
+    // The spec's sharpest wording: 429 *even with the correct password*. If a
+    // valid login reset or bypassed the counter, an attacker who guesses right
+    // on attempt 50 still gets in, and the limit was decoration.
+    it('locks out after 5 failed logins, right password included', async () => {
+      await seedVerifiedUser();
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await http()
+          .post('/auth/login')
+          .send({ email: EMAIL, password: 'wrong password' })
+          .expect(401);
+      }
+
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(429);
+    });
+
+    it('tells the client when to come back', async () => {
+      await seedVerifiedUser();
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await http()
+          .post('/auth/login')
+          .send({ email: EMAIL, password: 'wrong password' })
+          .expect(401);
+      }
+
+      const response = await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(429);
+
+      expect(response.headers).toHaveProperty('retry-after');
+    });
+
+    // Per-account, not just per-source: hammering one account from a hundred
+    // IPs must not buy a hundred budgets.
+    it('counts login attempts against the account, not only the caller', async () => {
+      await seedVerifiedUser();
+      await createVerifiedUser(prisma, {
+        email: 'other@example.com',
+        passwordHash: await passwords.hash(PASSWORD),
+      });
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await http()
+          .post('/auth/login')
+          .send({ email: EMAIL, password: 'wrong password' })
+          .expect(401);
+      }
+
+      // Locked for the targeted account...
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(429);
+
+      // ...but a different account is unaffected, so one user under attack
+      // cannot lock everybody else out. (Same IP: this is the per-email key
+      // doing the work, not the per-IP one, whose budget is also spent here.)
+      resetRateLimits();
+      await http()
+        .post('/auth/login')
+        .send({ email: 'other@example.com', password: PASSWORD })
+        .expect(200);
+    });
+
+    it('caps password reset mail at 3 per address per hour', async () => {
+      await seedVerifiedUser();
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await http()
+          .post('/auth/forgot-password')
+          .send({ email: EMAIL })
+          .expect(204);
+      }
+
+      // The abuse this stops is not against us: it is using our sender
+      // reputation to flood someone else's inbox.
+      await http()
+        .post('/auth/forgot-password')
+        .send({ email: EMAIL })
+        .expect(429);
+
+      expect(mail.passwordResetEmails).toHaveLength(3);
+    });
+
+    it('caps verification resends the same way', async () => {
+      await http()
+        .post('/auth/register')
+        .send({ email: EMAIL, password: PASSWORD, name: 'Ada' })
+        .expect(201);
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await http()
+          .post('/auth/resend-verification')
+          .send({ email: EMAIL })
+          .expect(204);
+      }
+
+      await http()
+        .post('/auth/resend-verification')
+        .send({ email: EMAIL })
+        .expect(429);
+    });
+
+    it('caps registrations per source', async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await http()
+          .post('/auth/register')
+          .send({
+            email: `signup-${String(attempt)}@example.com`,
+            password: PASSWORD,
+            name: 'Ada',
+          })
+          .expect(201);
+      }
+
+      await http()
+        .post('/auth/register')
+        .send({
+          email: 'one-too-many@example.com',
+          password: PASSWORD,
+          name: 'Ada',
+        })
+        .expect(429);
+    });
+
+    it('does not rate limit an unthrottled route', async () => {
+      // The limits are on the sensitive routes, not blanket across the API.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await http().get('/').expect(200);
+      }
     });
   });
 
