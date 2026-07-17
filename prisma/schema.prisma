@@ -1,0 +1,19 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+
+  // This project is CommonJS (no "type": "module" in package.json). Without
+  // this the generator emits ESM-only `import.meta.url`, which survives tsc's
+  // CJS transpile and makes Node load the client as ESM — where `exports` is
+  // undefined and boot crashes.
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}

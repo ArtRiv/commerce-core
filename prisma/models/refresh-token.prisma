@@ -1,0 +1,44 @@
+/// One issued refresh token. Rotating and single-use: /auth/refresh
+/// consumes the presented token and issues a replacement in the same
+/// family. See docs/specs/auth.md.
+model RefreshToken {
+  id String @id @default(uuid())
+
+  /// SHA-256 of the token, never the token itself (docs/security.md).
+  ///
+  /// Deliberately not argon2, unlike User.passwordHash. Argon2 is slow *by
+  /// design* to make low-entropy passwords expensive to guess, and salts each
+  /// hash — so the same input yields a different digest every time, which means
+  /// a lookup would have to scan every row and verify one by one. A refresh
+  /// token is 256 bits of CSPRNG output, so there is nothing to brute-force and
+  /// no need to be slow: a plain digest is safe here and is indexable, which is
+  /// what makes reuse detection a single query.
+  tokenHash String @unique @map("token_hash")
+
+  /// Groups every token descended from one login. Rotation replaces a token
+  /// within its family; detecting reuse revokes the family, which is what makes
+  /// a stolen token worthless without knocking out the user's other sessions.
+  /// Not a FK: a family has no attributes of its own, only membership.
+  familyId String @map("family_id")
+
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime @map("expires_at")
+
+  /// Spent normally, by rotation. Distinct from revokedAt: a *consumed* token
+  /// coming back is the theft signal (the legitimate client already moved on),
+  /// while a *revoked* one is simply dead. Collapsing both into one flag would
+  /// erase that distinction, and with it the ability to tell a replay attack
+  /// from a logged-out client retrying.
+  consumedAt DateTime? @map("consumed_at")
+
+  /// Killed by logout, by reuse detection, or by a password reset.
+  revokedAt DateTime? @map("revoked_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}

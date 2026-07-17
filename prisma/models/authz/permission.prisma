@@ -1,0 +1,26 @@
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  description String?
+
+  userAssignments UserPermission[]
+  roleAssignments RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserPermission {
+  userId       String   @map("user_id")
+  permissionId String   @map("permission_id")
+  grantedById  String?  @map("granted_by_id")
+  grantedAt    DateTime @default(now()) @map("granted_at")
+
+  user       User       @relation("PermissionAssignee", fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  grantedBy  User?      @relation("PermissionGranter", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@id([userId, permissionId])
+  @@index([permissionId])
+  @@index([grantedById])
+  @@map("user_permissions")
+}

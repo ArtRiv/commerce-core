@@ -1,0 +1,35 @@
+model User {
+  id String @id @default(uuid())
+
+  email String  @unique
+  name  String?
+
+  /// Null until the address is proven. Login by password requires it set;
+  /// Google login sets it on the spot, since Google already proved ownership.
+  emailVerifiedAt DateTime? @map("email_verified_at")
+
+  /// Optional: an account created through Google never set a password.
+  /// Password login against such an account must fail with the same generic
+  /// error as a wrong password — see docs/specs/auth.md.
+  passwordHash String? @map("password_hash")
+
+  /// Google's subject id, set when an account signs in with Google or gets
+  /// auto-linked to one. Unique, and matched on before email: it is stable,
+  /// whereas an address can be reassigned by its domain owner.
+  googleId String? @unique @map("google_id")
+
+  roleId String @map("role_id")
+  role   Role   @relation(fields: [roleId], references: [id])
+
+  refreshTokens      RefreshToken[]
+  verificationTokens VerificationToken[]
+
+  permissionsGrantedToUser UserPermission[] @relation("PermissionAssignee")
+  permissionsGrantedByUser UserPermission[] @relation("PermissionGranter")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([roleId])
+  @@map("users")
+}
