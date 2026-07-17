@@ -2,12 +2,24 @@
 
 ## Status
 
-`draft`
+`em implementação`
+
+Entrega em duas fases. **Fase 1** (atual): o loop core de e-mail/senha —
+registro, login, refresh e logout. **Fase 2**: verificação de e-mail via
+Resend, Google OAuth, reset de senha e rate limiting.
+
+A spec inteira fica aqui desde já — o que muda por fase é só quais
+critérios de aceitação estão marcados. Consequência conhecida da fase 1:
+como só a verificação de e-mail preenche `emailVerifiedAt`, e ela é fase
+2, nenhuma conta registrada pela API consegue logar até lá. Contas
+verificadas são criadas direto no banco (é o que os testes fazem). Isso
+é um degrau da fase 1, não uma regra — a regra de negócio (login exige
+e-mail verificado) vale desde o dia 1 e é testada desde já.
 
 ## Objetivo
 
 Autenticar usuários por dois métodos (e-mail/senha e Google OAuth) e
-autorizar ações via RBAC (`cliente`, `operador`, `admin`), usando access
+autorizar ações via RBAC (`customer`, `operator`, `admin`), usando access
 token JWT de vida curta + refresh token rotativo de uso único.
 
 ## Escopo
@@ -30,7 +42,8 @@ token JWT de vida curta + refresh token rotativo de uso único.
   já configurado pra verificação
 - Rate limiting nas rotas sensíveis (login, registro, refresh,
   forgot-password) via `@nestjs/throttler`
-- RBAC: guard + decorator (`@Roles(...)`) pra proteger rotas por papel
+- RBAC: guard + decorator (`@RequirePermissions(...)`) pra proteger
+  rotas por permissão
 
 ### Não entra (fica pra depois)
 
@@ -48,17 +61,31 @@ token JWT de vida curta + refresh token rotativo de uso único.
   verificado (`emailVerifiedAt IS NOT NULL`).
 - Login via Google não passa pela verificação de e-mail: o Google já
   garante a posse.
-- Role no registro é sempre `cliente`. `operador`/`admin` só são
-  atribuídos por ação administrativa — nunca escolhido pelo próprio
-  usuário no fluxo de registro.
+- Role no registro é sempre a role marcada `isDefault` no banco
+  (`customer`). `operator`/`admin` só são atribuídos por ação
+  administrativa — nunca escolhido pelo próprio usuário no fluxo de
+  registro.
+- Autorização é por **permissão**, não por papel. Papéis são linhas no
+  banco que mapeiam pra um conjunto de permissões (ver
+  `src/auth/authz/permissions.ts`); a rota declara a capacidade que
+  precisa (`@RequirePermissions(PERMISSIONS.ORDERS_REFUND)`) e continua
+  correta quando a definição de um papel muda. Checar papel direto na
+  rota acopla a rota à tabela de papéis.
 - Senha nunca é armazenada em texto puro — hash com `argon2id`.
+- `passwordHash` é **opcional**: conta criada via Google nunca definiu
+  senha. Login por senha numa conta sem hash falha com o mesmo erro
+  genérico de senha errada — se respondesse diferente, o endpoint
+  viraria um oráculo dizendo quais contas são Google-only.
 - Senha: mínimo 8 caracteres, máximo 128 (só pra evitar DoS por input
   gigante) — sem regra de composição forçada (maiúscula/número/
   símbolo), seguindo o OWASP Authentication Cheat Sheet. Ver
   [`docs/security.md`](../security.md).
-- Access token: JWT assinado com HS256, vida de 15 min, carrega `sub`
-  (userId) e `role`. Stateless — não é revogado no logout, só expira
-  sozinho (por isso a vida precisa ser curta).
+- Access token: JWT assinado com HS256, vida de 15 min, carrega só
+  `sub` (userId). Papel e permissões **não** entram no payload: o token
+  é um retrato de 15 min e papéis são editáveis em runtime, então
+  permissão embutida envelhece e concede a mais. O `JwtStrategy`
+  resolve as permissões do banco a cada request. Stateless — não é
+  revogado no logout, só expira sozinho (por isso a vida é curta).
 - Refresh token: vida de 7 dias, uso único (rotativo). Reusar um token
   já consumido é sinal de roubo — revoga a família inteira daquela
   sessão, forçando novo login. Armazenado no banco só como hash, nunca
@@ -66,7 +93,11 @@ token JWT de vida curta + refresh token rotativo de uso único.
 - Token de verificação de e-mail e de reset de senha: de uso único,
   expiram (verificação: 24h; reset: 1h), armazenados como hash no
   banco pelo mesmo motivo do refresh token.
-- Logout revoga a família de refresh tokens atual.
+- Logout revoga a família de refresh tokens atual. Exige o refresh
+  token no body além do access token: o access token carrega só `sub`,
+  então sozinho ele não identifica *qual* sessão encerrar — revogaria
+  todas, que é "sair de todos os dispositivos", não logout. O token
+  apresentado precisa pertencer ao usuário autenticado.
 - Trocar a senha (via reset) invalida todas as sessões existentes do
   usuário — todas as famílias de refresh token são revogadas, não só
   a atual.
@@ -85,8 +116,8 @@ token JWT de vida curta + refresh token rotativo de uso único.
 | POST   | `/auth/login`               | Login e-mail/senha (exige e-mail verificado)      | público              |
 | GET    | `/auth/google`              | Inicia o OAuth flow do Google                     | público              |
 | GET    | `/auth/google/callback`     | Callback do Google, emite tokens                  | público              |
-| POST   | `/auth/refresh`             | Troca refresh token válido por novo par           | refresh token válido |
-| POST   | `/auth/logout`              | Revoga a família de refresh token da sessão atual | autenticado          |
+| POST   | `/auth/refresh`             | Troca refresh token válido por novo par           | refresh token no body |
+| POST   | `/auth/logout`              | Revoga a família de refresh token da sessão atual | autenticado + refresh token no body |
 | POST   | `/auth/forgot-password`     | Dispara e-mail de reset, se a conta existir       | público              |
 | POST   | `/auth/reset-password`      | Define nova senha via token de reset              | público              |
 
@@ -102,6 +133,11 @@ class RegisterDto {
 class LoginDto {
   email: string;
   password: string;
+}
+
+// Usado por /auth/refresh e /auth/logout.
+class RefreshTokenDto {
+  refreshToken: string;
 }
 
 interface TokenPair {
@@ -150,8 +186,9 @@ class ResetPasswordDto {
 - [ ] Dado um usuário autenticado, quando chama `/auth/logout`, então
       a família de refresh token atual é revogada (um refresh
       subsequente falha).
-- [ ] Dado um usuário com role `cliente`, quando acessa uma rota
-      protegida com `@Roles('admin')`, então recebe 403.
+- [ ] Dado um usuário com role `customer`, quando acessa uma rota
+      protegida com `@RequirePermissions(PERMISSIONS.ORDERS_REFUND)`,
+      então recebe 403.
 - [ ] Dado um e-mail de conta existente, quando chamo
       `/auth/forgot-password`, então um e-mail com link de reset é
       disparado e a resposta da API não revela se a conta existe.
