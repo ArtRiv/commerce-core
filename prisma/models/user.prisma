@@ -1,0 +1,20 @@
+model User {
+  id String @id @default(uuid())
+
+  email String  @unique
+  name  String?
+
+  passwordHash String @map("password_hash")
+
+  roleId String @map("role_id")
+  role   Role   @relation(fields: [roleId], references: [id])
+
+  permissionsGrantedToUser UserPermission[] @relation("PermissionAssignee")
+  permissionsGrantedByUser UserPermission[] @relation("PermissionGranter")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([roleId])
+  @@map("users")
+}
