@@ -49,6 +49,11 @@ interface UserUpdateArgs {
   };
 }
 
+interface UserUpdateManyArgs {
+  where: { id: string; emailVerifiedAt: null };
+  data: { emailVerifiedAt: Date };
+}
+
 interface RoleFindArgs {
   where: { isDefault: boolean };
 }
@@ -63,6 +68,9 @@ function createMocks() {
       update: jest
         .fn<Promise<unknown>, [UserUpdateArgs]>()
         .mockResolvedValue({}),
+      updateMany: jest
+        .fn<Promise<{ count: number }>, [UserUpdateManyArgs]>()
+        .mockResolvedValue({ count: 1 }),
     },
     role: {
       findFirst: jest
@@ -511,6 +519,20 @@ describe('AuthService', () => {
       // one they already have.
       expect(refreshTokens.revokeAllSessions).toHaveBeenCalledWith('user-1');
       expect(refreshTokens.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it('verifies the address, but only if it was not already', async () => {
+      const { service, prisma, verificationTokens } = createMocks();
+      verificationTokens.consume.mockResolvedValue('user-1');
+
+      await service.resetPassword('token', 'a brand new password');
+
+      // Opening the emailed link proves ownership, so a pending verification is
+      // satisfied. Scoped to emailVerifiedAt:null so an already-verified
+      // account keeps its original date rather than having it rewritten.
+      const [verify] = prisma.user.updateMany.mock.calls[0];
+      expect(verify.where).toEqual({ id: 'user-1', emailVerifiedAt: null });
+      expect(verify.data.emailVerifiedAt).toBeInstanceOf(Date);
     });
 
     it('changes nothing when the token is rejected', async () => {

@@ -56,6 +56,20 @@ export async function createTestApp(): Promise<TestApp> {
     prisma: app.get(PrismaService),
     mail,
     resetRateLimits: () => {
+      // Cancel the pending cleanup timers before dropping the records they
+      // point at. Each increment schedules a setTimeout that, when it fires,
+      // reads storage.get(key) and destructures it — so clearing storage alone
+      // leaves timers that crash on a now-missing key a moment later, in
+      // whatever test happens to be running then. timeoutIds is the service's
+      // own registry of those timers; this mirrors its clearExpirationTimes
+      // across every throttler name.
+      const { timeoutIds } = storage as unknown as {
+        timeoutIds: Map<string, NodeJS.Timeout[]>;
+      };
+      for (const ids of timeoutIds.values()) {
+        ids.forEach(clearTimeout);
+      }
+      timeoutIds.clear();
       storage.storage.clear();
     },
   };

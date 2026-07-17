@@ -20,8 +20,8 @@ import type { GoogleProfile } from '../auth.service';
  */
 export function isGoogleConfigured(config: ConfigService): boolean {
   return (
-    !!config.get<string>('GOOGLE_CLIENT_ID') &&
-    !!config.get<string>('GOOGLE_CLIENT_SECRET')
+    !!config.get<string>('GOOGLE_OAUTH_CLIENT_ID') &&
+    !!config.get<string>('GOOGLE_OAUTH_CLIENT_SECRET')
   );
 }
 
@@ -29,9 +29,13 @@ export function isGoogleConfigured(config: ConfigService): boolean {
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   constructor(config: ConfigService) {
     super({
-      clientID: config.getOrThrow<string>('GOOGLE_CLIENT_ID'),
-      clientSecret: config.getOrThrow<string>('GOOGLE_CLIENT_SECRET'),
-      callbackURL: `${config.getOrThrow<string>('APP_URL')}/auth/google/callback`,
+      clientID: config.getOrThrow<string>('GOOGLE_OAUTH_CLIENT_ID'),
+      clientSecret: config.getOrThrow<string>('GOOGLE_OAUTH_CLIENT_SECRET'),
+      // API_URL, not APP_URL: this callback is a route on *this service*, where
+      // Google sends the browser back with the auth code. APP_URL is the
+      // frontend, which is where the emailed links point instead — two
+      // different origins, which is why they are two variables.
+      callbackURL: `${config.getOrThrow<string>('API_URL')}/auth/google/callback`,
       scope: ['email', 'profile'],
     });
   }

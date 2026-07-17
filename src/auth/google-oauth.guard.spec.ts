@@ -14,8 +14,8 @@ function configWith(values: Record<string, string | undefined>): ConfigService {
 }
 
 const CONFIGURED = {
-  GOOGLE_CLIENT_ID: 'client-id',
-  GOOGLE_CLIENT_SECRET: 'client-secret',
+  GOOGLE_OAUTH_CLIENT_ID: 'client-id',
+  GOOGLE_OAUTH_CLIENT_SECRET: 'client-secret',
 };
 
 describe('isGoogleConfigured', () => {
@@ -28,18 +28,21 @@ describe('isGoogleConfigured', () => {
     // A client id with no secret is a misconfiguration, not a configuration —
     // treating it as enabled would fail later and less clearly.
     expect(
-      isGoogleConfigured(configWith({ GOOGLE_CLIENT_ID: 'client-id' })),
+      isGoogleConfigured(configWith({ GOOGLE_OAUTH_CLIENT_ID: 'client-id' })),
     ).toBe(false);
     expect(
-      isGoogleConfigured(configWith({ GOOGLE_CLIENT_SECRET: 'secret' })),
+      isGoogleConfigured(configWith({ GOOGLE_OAUTH_CLIENT_SECRET: 'secret' })),
     ).toBe(false);
   });
 
   it('is false for an empty string, not just a missing key', () => {
-    // GOOGLE_CLIENT_ID= in a .env file reads as '', which is not configured.
+    // GOOGLE_OAUTH_CLIENT_ID= in a .env file reads as '', which is not configured.
     expect(
       isGoogleConfigured(
-        configWith({ GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '' }),
+        configWith({
+          GOOGLE_OAUTH_CLIENT_ID: '',
+          GOOGLE_OAUTH_CLIENT_SECRET: '',
+        }),
       ),
     ).toBe(false);
   });

@@ -50,6 +50,7 @@ const DEFAULT_ACCESS_TOKEN_TTL = '15m';
         // is just a string. Nothing can check it at compile time; a malformed
         // JWT_ACCESS_TTL fails loudly at boot when jsonwebtoken parses it.
         signOptions: {
+          algorithm: 'HS256',
           expiresIn: (config.get<string>('JWT_ACCESS_TTL') ??
             DEFAULT_ACCESS_TOKEN_TTL) as JwtSignOptions['expiresIn'],
         },

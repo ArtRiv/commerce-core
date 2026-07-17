@@ -17,6 +17,11 @@ export class ResendMailService implements MailService {
     // boot beats discovering it when the first user cannot sign in.
     this.resend = new Resend(config.getOrThrow<string>('RESEND_API_KEY'));
     this.from = config.getOrThrow<string>('MAIL_FROM');
+    // The frontend base, not this API. These links are opened in a browser and
+    // land on pages (`/verify-email?token=`, `/reset-password?token=`) that
+    // read the token and POST it back to the matching /auth endpoint. Pointing
+    // this at the API would send users to a 404 — the API route is a POST at a
+    // different path.
     this.appUrl = config.getOrThrow<string>('APP_URL');
   }
 

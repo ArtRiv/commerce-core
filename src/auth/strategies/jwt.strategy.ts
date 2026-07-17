@@ -27,6 +27,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: config.getOrThrow<string>('JWT_SECRET'),
+      // Pin the algorithm on the *verify* side. The signer already emits HS256,
+      // but the verifier is where it matters: without this, a token is accepted
+      // for any algorithm the library allows, and the classic JWT attack is to
+      // re-sign with a different one. Belt and braces even with a symmetric
+      // secret — it costs one line and removes the whole class of confusion.
+      algorithms: ['HS256'],
     });
   }
 

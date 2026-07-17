@@ -86,9 +86,9 @@ token JWT de vida curta + refresh token rotativo de uso único.
   verificada — o Google acabou de provar a posse. Se já era verificada,
   a data original é mantida.
 - Google é configuração **opcional** (ao contrário do Resend): sem
-  `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` o app sobe normalmente e as
-  rotas do Google respondem 503. A `GoogleStrategy` só é registrada
-  quando as duas variáveis existem.
+  `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` o app sobe
+  normalmente e as rotas do Google respondem 503. A `GoogleStrategy` só é
+  registrada quando as duas variáveis existem.
 - Role no registro é sempre a role marcada `isDefault` no banco
   (`customer`). `operator`/`admin` só são atribuídos por ação
   administrativa — nunca escolhido pelo próprio usuário no fluxo de
@@ -134,12 +134,24 @@ token JWT de vida curta + refresh token rotativo de uso único.
 - Trocar a senha (via reset) invalida todas as sessões existentes do
   usuário — todas as famílias de refresh token são revogadas, não só
   a atual.
+- Completar um reset de senha também **verifica o e-mail**, se ainda não
+  estava. Chegar num token de reset significa que a pessoa abriu um link
+  que mandamos pra aquele endereço — a mesma prova de posse que o e-mail
+  de verificação pede, e a mesma em que o login do Google se apoia. Sem
+  isso, quem registra, pula a verificação e depois reseta a senha
+  definiria uma senha válida e mesmo assim tomaria 403 no login. Conta já
+  verificada mantém a data original (mesmo comportamento do Google).
 - Rate limit nas rotas sensíveis (defaults, ajustáveis, todos em
   `src/auth/throttling/rate-limits.ts`): login 5 tentativas / 15 min
   (por IP **e** por conta); registro 5 / hora por IP; forgot-password
   **e resend-verification** 3 / hora por e-mail (evita usar o endpoint
-  pra floodar a caixa de entrada de terceiros); refresh 30 / 15 min por
-  IP.
+  pra floodar a caixa de entrada de terceiros); refresh 60 / min por IP.
+- O limite do refresh é diferente de propósito: refresh token é 256 bits
+  de aleatório guardado como hash, não tem o que adivinhar, então não é
+  limite anti-brute-force como o do login — é só anti-flood. Por isso é
+  generoso: um cliente real dá refresh ~1x por vida do access token
+  (~15 min), e um número apertado por IP puniria vários usuários atrás
+  de um NAT por uma ameaça que aqui não existe.
 - `resend-verification` não estava na lista original da spec, mas
   dispara e-mail pra terceiro igual ao forgot-password — mesmo vetor de
   abuso, mesmo limite. O princípio em [`docs/security.md`](../security.md)
@@ -209,13 +221,16 @@ class ResetPasswordDto {
 
 ### Configuração necessária
 
+Ver [`.env.example`](../../.env.example) pro arquivo completo.
+
 | Variável         | Para quê                                     |
 | ---------------- | -------------------------------------------- |
 | `RESEND_API_KEY` | Envio de e-mail. Sem ela o app não sobe.     |
-| `MAIL_FROM`      | Remetente dos e-mails (domínio verificado no Resend). |
-| `APP_URL`        | Base dos links de verificação/reset e do callback do Google. |
-| `GOOGLE_CLIENT_ID`     | Login com Google. Opcional — sem ela as rotas do Google dão 503. |
-| `GOOGLE_CLIENT_SECRET` | Idem.                                    |
+| `MAIL_FROM`      | Remetente dos e-mails (domínio verificado no Resend; sem domínio, o sandbox `onboarding@resend.dev`). |
+| `APP_URL`        | Base do **frontend**. Os links de verificação/reset apontam pra cá — abrem numa página que lê o token e chama a API. |
+| `API_URL`        | Base **desta API**. O callback do Google é rota daqui, então a callback URL sai disso. Origens diferentes do `APP_URL`, por isso duas variáveis. |
+| `GOOGLE_OAUTH_CLIENT_ID`     | Login com Google. Opcional — sem ela as rotas do Google dão 503. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Idem. O redirect autorizado no console do Google tem que bater **exato** com `${API_URL}/auth/google/callback`. |
 
 ## Critérios de aceitação
 

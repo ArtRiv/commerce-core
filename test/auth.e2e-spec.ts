@@ -346,6 +346,36 @@ describe('Auth (e2e)', () => {
         .expect(200);
     });
 
+    // Regression. Reaching a reset link proves ownership of the address, so a
+    // reset must also verify it — otherwise a user who registered, skipped
+    // verification, then reset their password would set a working password and
+    // still be locked out at login with a 403. This exact path used to fail.
+    it('verifies an account that reset without ever confirming its email', async () => {
+      await http()
+        .post('/auth/register')
+        .send({ email: EMAIL, password: PASSWORD, name: 'Ada' })
+        .expect(201);
+
+      // Still unverified: a password login is refused here.
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(403);
+
+      const token = await requestReset();
+      await http()
+        .post('/auth/reset-password')
+        .send({ token, newPassword: 'a whole new password' })
+        .expect(204);
+
+      // Now it works — the reset both changed the password and verified the
+      // address.
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: 'a whole new password' })
+        .expect(200);
+    });
+
     // A reset usually means the account is already compromised. Leaving live
     // sessions would change the lock with the intruder still inside.
     it('signs every existing session out', async () => {

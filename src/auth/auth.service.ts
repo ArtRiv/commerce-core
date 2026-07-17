@@ -165,13 +165,21 @@ export class AuthService {
   }
 
   /**
-   * Sets a new password and signs every session out.
+   * Sets a new password, verifies the address, and signs every session out.
    *
    * The revocation is the security-relevant half. Someone resetting a password
    * is often doing it *because* the account is compromised, so leaving existing
    * refresh tokens alive would let the intruder keep the session they already
    * have — the reset would change the lock and leave them inside. This is the
    * one operation that sweeps every family, not just one.
+   *
+   * It also verifies the email. Reaching a reset token means the user opened a
+   * link we mailed to that address, which is the same proof of ownership our
+   * verification email asks for and the same proof Google sign-in relies on —
+   * so an account that never confirmed its address is confirmed now. Without
+   * this, a user who registered, skipped verification, then reset their
+   * password would set a working password and still be unable to log in
+   * (a real bug this replaced: the reset succeeded and login still 403'd).
    */
   async resetPassword(token: string, newPassword: string): Promise<void> {
     const userId = await this.verificationTokens.consume(
@@ -182,6 +190,13 @@ export class AuthService {
     await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash: await this.passwords.hash(newPassword) },
+    });
+
+    // Conditional so an already-verified account keeps its original date,
+    // matching loginWithGoogle. A no-op when emailVerifiedAt is already set.
+    await this.prisma.user.updateMany({
+      where: { id: userId, emailVerifiedAt: null },
+      data: { emailVerifiedAt: new Date() },
     });
 
     await this.refreshTokens.revokeAllSessions(userId);

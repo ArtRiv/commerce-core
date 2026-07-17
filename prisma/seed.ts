@@ -39,17 +39,26 @@ async function main() {
       select: { id: true },
     });
 
+    const permissionLinks = permissions.map((p) => ({ permissionId: p.id }));
+
     await prisma.role.upsert({
       where: { name: role.name },
       create: {
         name: role.name,
         description: role.description,
         isDefault: role.isDefault,
-        permissions: {
-          create: permissions.map((p) => ({ permissionId: p.id })),
-        },
+        permissions: { create: permissionLinks },
       },
-      update: {},
+      // Re-sync on every seed. `update: {}` meant role-permissions.ts was the
+      // source of truth only for brand-new roles — edit a role's permissions
+      // and reseed, and nothing happened, because upsert found the row and did
+      // nothing. deleteMany clears this role's join rows and create rebuilds
+      // them from the catalog, so the file wins every time.
+      update: {
+        description: role.description,
+        isDefault: role.isDefault,
+        permissions: { deleteMany: {}, create: permissionLinks },
+      },
     });
   }
 }
