@@ -3,10 +3,11 @@ import type { PrismaService } from '../../src/prisma/prisma.service';
 /**
  * Clears the tables the auth tests own, between tests.
  *
- * `users` only — refresh_tokens follows via CASCADE. Roles and permissions are
- * deliberately left alone: they are seeded reference data, not test fixtures,
- * and registration reads the is_default role out of them. Truncating those
- * would break registration in a way that looks like an application bug.
+ * `users` only — refresh_tokens and verification_tokens follow via CASCADE.
+ * Roles and permissions are deliberately left alone: they are seeded reference
+ * data, not test fixtures, and registration reads the is_default role out of
+ * them. Truncating those would break registration in a way that looks like an
+ * application bug.
  */
 export async function resetAuthTables(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "users" CASCADE');
@@ -14,7 +15,8 @@ export async function resetAuthTables(prisma: PrismaService): Promise<void> {
 
 interface VerifiedUserInput {
   email: string;
-  passwordHash: string;
+  /** Null models an account created through Google, which never set one. */
+  passwordHash: string | null;
 }
 
 /**

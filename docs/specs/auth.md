@@ -4,17 +4,19 @@
 
 `em implementação`
 
-Entrega em duas fases. **Fase 1** (atual): o loop core de e-mail/senha —
-registro, login, refresh e logout. **Fase 2**: verificação de e-mail via
-Resend, Google OAuth, reset de senha e rate limiting.
+Entrega em fases. **Fase 1** (feita): loop core de e-mail/senha —
+registro, login, refresh, logout. **Fase 2** (feita): verificação de
+e-mail via Resend e reset de senha — o fluxo `registro → verificar →
+login` fecha inteiro pela API agora, sem ninguém tocar no banco.
+**Falta**: Google OAuth e rate limiting.
 
 A spec inteira fica aqui desde já — o que muda por fase é só quais
-critérios de aceitação estão marcados. Consequência conhecida da fase 1:
-como só a verificação de e-mail preenche `emailVerifiedAt`, e ela é fase
-2, nenhuma conta registrada pela API consegue logar até lá. Contas
-verificadas são criadas direto no banco (é o que os testes fazem). Isso
-é um degrau da fase 1, não uma regra — a regra de negócio (login exige
-e-mail verificado) vale desde o dia 1 e é testada desde já.
+critérios de aceitação estão marcados.
+
+Ainda não coberto por teste: `ResendMailService`. O e2e troca o provedor
+por um fake (senão a suíte mandaria e-mail de verdade, e o app nem subiria
+sem `RESEND_API_KEY`). Tudo até a fronteira do provedor é testado; a
+chamada pro Resend em si, não.
 
 ## Objetivo
 
@@ -150,8 +152,14 @@ interface TokenPair {
   refreshToken: string;
 }
 
-class ForgotPasswordDto {
+// Usado por /auth/resend-verification e /auth/forgot-password — mesma
+// forma, e ambos respondem igual exista a conta ou não.
+class EmailDto {
   email: string;
+}
+
+class VerifyEmailDto {
+  token: string;
 }
 
 class ResetPasswordDto {
@@ -160,6 +168,14 @@ class ResetPasswordDto {
 }
 ```
 
+### Configuração necessária
+
+| Variável         | Para quê                                     |
+| ---------------- | -------------------------------------------- |
+| `RESEND_API_KEY` | Envio de e-mail. Sem ela o app não sobe.     |
+| `MAIL_FROM`      | Remetente dos e-mails (domínio verificado no Resend). |
+| `APP_URL`        | Base dos links de verificação/reset.         |
+
 ## Critérios de aceitação
 
 Legenda: `[x]` entregue e coberto por teste, `[~]` parcial (o que falta
@@ -167,14 +183,13 @@ está anotado no item), `[ ]` fase 2. Os itens marcados são cobertos por
 `test/auth.e2e-spec.ts` no nível HTTP, mais os unitários ao lado do
 código.
 
-- [~] Dado um e-mail novo, quando registro com senha, então a conta é
+- [x] Dado um e-mail novo, quando registro com senha, então a conta é
       criada com `emailVerifiedAt = null` e um e-mail de verificação é
-      disparado. — conta criada e não-verificada: OK (fase 1). Disparo do
-      e-mail: fase 2.
+      disparado.
 - [x] Dado um e-mail não verificado, quando tento logar com
       e-mail/senha, então o login é rejeitado (401/403, mensagem clara
       de "verifique seu e-mail").
-- [ ] Dado o token de verificação correto, quando chamo
+- [x] Dado o token de verificação correto, quando chamo
       `/auth/verify-email`, então `emailVerifiedAt` é preenchido e o
       login por senha passa a funcionar.
 - [x] Dado um e-mail verificado e senha correta, quando faço login,
@@ -200,18 +215,18 @@ código.
 - [ ] Dado um usuário com role `customer`, quando acessa uma rota
       protegida com `@RequirePermissions(PERMISSIONS.ORDERS_REFUND)`,
       então recebe 403.
-- [ ] Dado um e-mail de conta existente, quando chamo
+- [x] Dado um e-mail de conta existente, quando chamo
       `/auth/forgot-password`, então um e-mail com link de reset é
       disparado e a resposta da API não revela se a conta existe.
-- [ ] Dado um e-mail que não tem conta, quando chamo
+- [x] Dado um e-mail que não tem conta, quando chamo
       `/auth/forgot-password`, então a resposta é idêntica à do caso
       acima (sem vazar existência da conta), mas nenhum e-mail é
       enviado.
-- [ ] Dado um token de reset válido e não usado, quando chamo
+- [x] Dado um token de reset válido e não usado, quando chamo
       `/auth/reset-password` com senha nova, então a senha é
       atualizada e todas as sessões anteriores do usuário deixam de
       funcionar (refresh tokens antigos revogados).
-- [ ] Dado um token de reset expirado ou já usado, quando chamo
+- [x] Dado um token de reset expirado ou já usado, quando chamo
       `/auth/reset-password`, então a operação falha sem alterar a
       senha.
 - [ ] Dado mais de 5 tentativas de login falhas em 15 min pra mesma

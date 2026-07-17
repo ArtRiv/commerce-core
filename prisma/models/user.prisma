@@ -16,7 +16,8 @@ model User {
   roleId String @map("role_id")
   role   Role   @relation(fields: [roleId], references: [id])
 
-  refreshTokens RefreshToken[]
+  refreshTokens      RefreshToken[]
+  verificationTokens VerificationToken[]
 
   permissionsGrantedToUser UserPermission[] @relation("PermissionAssignee")
   permissionsGrantedByUser UserPermission[] @relation("PermissionGranter")

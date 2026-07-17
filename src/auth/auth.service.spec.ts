@@ -1,14 +1,19 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { JwtService } from '@nestjs/jwt';
 
+import { VerificationTokenPurpose } from '../generated/prisma/enums';
 import type { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
 import type { PasswordService } from './password.service';
 import type { RefreshTokenService } from './refresh-token.service';
+import type { VerificationTokenService } from './verification-token.service';
+
+const { EMAIL_VERIFICATION, PASSWORD_RESET } = VerificationTokenPurpose;
 
 interface StoredUser {
   id: string;
@@ -31,6 +36,11 @@ interface UserCreateArgs {
   };
 }
 
+interface UserUpdateArgs {
+  where: { id: string };
+  data: { emailVerifiedAt?: Date; passwordHash?: string };
+}
+
 interface RoleFindArgs {
   where: { isDefault: boolean };
 }
@@ -42,6 +52,9 @@ function createMocks() {
       create: jest
         .fn<Promise<{ id: string; email: string }>, [UserCreateArgs]>()
         .mockResolvedValue({ id: 'user-1', email: 'ada@example.com' }),
+      update: jest
+        .fn<Promise<unknown>, [UserUpdateArgs]>()
+        .mockResolvedValue({}),
     },
     role: {
       findFirst: jest
@@ -69,6 +82,22 @@ function createMocks() {
     revokeAllSessions: jest.fn<Promise<void>, [string]>(),
   };
 
+  const verificationTokens = {
+    issue: jest
+      .fn<Promise<string>, [string, VerificationTokenPurpose]>()
+      .mockResolvedValue('verification-token'),
+    consume: jest.fn<Promise<string>, [string, VerificationTokenPurpose]>(),
+  };
+
+  const mail = {
+    sendVerificationEmail: jest
+      .fn<Promise<void>, [string, string]>()
+      .mockResolvedValue(undefined),
+    sendPasswordResetEmail: jest
+      .fn<Promise<void>, [string, string]>()
+      .mockResolvedValue(undefined),
+  };
+
   const jwt = {
     signAsync: jest
       .fn<Promise<string>, [Record<string, unknown>]>()
@@ -79,11 +108,23 @@ function createMocks() {
     prisma as unknown as PrismaService,
     passwords as unknown as PasswordService,
     refreshTokens as unknown as RefreshTokenService,
+    verificationTokens as unknown as VerificationTokenService,
     jwt as unknown as JwtService,
+    mail,
   );
 
-  return { service, prisma, passwords, refreshTokens, jwt };
+  return {
+    service,
+    prisma,
+    passwords,
+    refreshTokens,
+    verificationTokens,
+    jwt,
+    mail,
+  };
 }
+
+const EMAIL = 'ada@example.com';
 
 const registerDto = {
   email: 'ada@example.com',
@@ -159,8 +200,8 @@ describe('AuthService', () => {
       expect(prisma.user.create).not.toHaveBeenCalled();
     });
 
-    it('does not duplicate an existing unverified account', async () => {
-      const { service, prisma } = createMocks();
+    it('does not duplicate an existing unverified account, and resends the link', async () => {
+      const { service, prisma, mail } = createMocks();
       prisma.user.findUnique.mockResolvedValue({
         id: 'user-1',
         email: 'ada@example.com',
@@ -169,12 +210,42 @@ describe('AuthService', () => {
       });
 
       // Per the spec's edge cases: re-registering an unverified address is
-      // treated as "I forgot I signed up" and resends the verification mail
-      // (phase 2), rather than erroring or creating a second row.
+      // treated as "I forgot I signed up" — resend the mail, no second row.
       const result = await service.register(registerDto);
 
       expect(result.id).toBe('user-1');
       expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(mail.sendVerificationEmail).toHaveBeenCalled();
+    });
+
+    it('mails a verification link to a new account', async () => {
+      const { service, prisma, mail, verificationTokens } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await service.register(registerDto);
+
+      expect(verificationTokens.issue).toHaveBeenCalledWith(
+        'user-1',
+        EMAIL_VERIFICATION,
+      );
+      expect(mail.sendVerificationEmail).toHaveBeenCalledWith(
+        EMAIL,
+        'verification-token',
+      );
+    });
+
+    // Spec edge case, and the reason the send is wrapped rather than awaited
+    // bare: the account exists and is fine, the user can ask for another link,
+    // and losing the sign-up over a provider's bad minute is the worse failure.
+    it('still registers when the mail provider is down', async () => {
+      const { service, prisma, mail } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+      mail.sendVerificationEmail.mockRejectedValue(new Error('Resend is down'));
+
+      const result = await service.register(registerDto);
+
+      expect(result.id).toBe('user-1');
+      expect(prisma.user.create).toHaveBeenCalled();
     });
   });
 
@@ -292,6 +363,158 @@ describe('AuthService', () => {
         UnauthorizedException,
       );
       expect(passwords.verify).toHaveBeenCalledWith(null, loginDto.password);
+    });
+  });
+
+  describe('verifyEmail', () => {
+    it('marks the address verified', async () => {
+      const { service, prisma, verificationTokens } = createMocks();
+      verificationTokens.consume.mockResolvedValue('user-1');
+
+      await service.verifyEmail('token');
+
+      expect(verificationTokens.consume).toHaveBeenCalledWith(
+        'token',
+        EMAIL_VERIFICATION,
+      );
+      const [update] = prisma.user.update.mock.calls[0];
+      expect(update.where.id).toBe('user-1');
+      expect(update.data.emailVerifiedAt).toBeInstanceOf(Date);
+    });
+
+    it('does not verify anything when the token is rejected', async () => {
+      const { service, prisma, verificationTokens } = createMocks();
+      verificationTokens.consume.mockRejectedValue(new BadRequestException());
+
+      await expect(service.verifyEmail('bad')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resendVerification', () => {
+    it('sends a fresh link to an unverified account', async () => {
+      const { service, prisma, mail } = createMocks();
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: EMAIL,
+        passwordHash: '$argon2id$…',
+        emailVerifiedAt: null,
+      });
+
+      await service.resendVerification(EMAIL);
+
+      expect(mail.sendVerificationEmail).toHaveBeenCalledWith(
+        EMAIL,
+        'verification-token',
+      );
+    });
+
+    it('stays silent for an unknown address', async () => {
+      const { service, prisma, mail } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      // Resolves, sends nothing. An error — or any observable difference —
+      // would make this endpoint an account-existence check.
+      await expect(service.resendVerification(EMAIL)).resolves.toBeUndefined();
+      expect(mail.sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('stays silent for an already-verified account', async () => {
+      const { service, prisma, mail } = createMocks();
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: EMAIL,
+        passwordHash: '$argon2id$…',
+        emailVerifiedAt: new Date(),
+      });
+
+      await expect(service.resendVerification(EMAIL)).resolves.toBeUndefined();
+      expect(mail.sendVerificationEmail).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('forgotPassword', () => {
+    it('mails a reset link to an account that has a password', async () => {
+      const { service, prisma, mail, verificationTokens } = createMocks();
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: EMAIL,
+        passwordHash: '$argon2id$…',
+        emailVerifiedAt: new Date(),
+      });
+
+      await service.forgotPassword(EMAIL);
+
+      expect(verificationTokens.issue).toHaveBeenCalledWith(
+        'user-1',
+        PASSWORD_RESET,
+      );
+      expect(mail.sendPasswordResetEmail).toHaveBeenCalledWith(
+        EMAIL,
+        'verification-token',
+      );
+    });
+
+    it('answers an unknown address the same way, sending nothing', async () => {
+      const { service, prisma, mail } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.forgotPassword(EMAIL)).resolves.toBeUndefined();
+      expect(mail.sendPasswordResetEmail).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing for a Google-only account, without saying so', async () => {
+      const { service, prisma, mail } = createMocks();
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: EMAIL,
+        passwordHash: null,
+        emailVerifiedAt: new Date(),
+      });
+
+      // There is no password to reset. The response still cannot differ, or it
+      // would reveal that this address signs in with Google.
+      await expect(service.forgotPassword(EMAIL)).resolves.toBeUndefined();
+      expect(mail.sendPasswordResetEmail).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resetPassword', () => {
+    it('sets the new password and signs every session out', async () => {
+      const { service, prisma, passwords, refreshTokens, verificationTokens } =
+        createMocks();
+      verificationTokens.consume.mockResolvedValue('user-1');
+
+      await service.resetPassword('token', 'a brand new password');
+
+      expect(verificationTokens.consume).toHaveBeenCalledWith(
+        'token',
+        PASSWORD_RESET,
+      );
+      expect(passwords.hash).toHaveBeenCalledWith('a brand new password');
+
+      const [update] = prisma.user.update.mock.calls[0];
+      expect(update.data.passwordHash).toBe('$argon2id$…');
+
+      // Every family, not just one: a reset usually means the account is
+      // compromised, and leaving live sessions would let the intruder keep the
+      // one they already have.
+      expect(refreshTokens.revokeAllSessions).toHaveBeenCalledWith('user-1');
+      expect(refreshTokens.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it('changes nothing when the token is rejected', async () => {
+      const { service, prisma, refreshTokens, verificationTokens } =
+        createMocks();
+      verificationTokens.consume.mockRejectedValue(new BadRequestException());
+
+      await expect(service.resetPassword('bad', 'whatever')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(refreshTokens.revokeAllSessions).not.toHaveBeenCalled();
     });
   });
 

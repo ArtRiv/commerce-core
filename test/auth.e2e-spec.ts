@@ -1,12 +1,12 @@
 import { INestApplication } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
 import { PasswordService } from '../src/auth/password.service';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { createTestApp } from './support/app';
 import { createVerifiedUser, resetAuthTables } from './support/db';
+import type { FakeMailService } from './support/fake-mail.service';
 
 const EMAIL = 'ada@example.com';
 const PASSWORD = 'correct horse battery staple';
@@ -24,21 +24,16 @@ describe('Auth (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let passwords: PasswordService;
+  let mail: FakeMailService;
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    await app.init();
-
-    prisma = app.get(PrismaService);
+    ({ app, prisma, mail } = await createTestApp());
     passwords = app.get(PasswordService);
   });
 
   beforeEach(async () => {
     await resetAuthTables(prisma);
+    mail.reset();
   });
 
   afterAll(async () => {
@@ -141,6 +136,265 @@ describe('Auth (e2e)', () => {
 
       expect(users).toHaveLength(1);
       expect(users[0].email).toBe(EMAIL);
+    });
+  });
+
+  describe('POST /auth/verify-email', () => {
+    async function register(): Promise<void> {
+      await http()
+        .post('/auth/register')
+        .send({ email: EMAIL, password: PASSWORD, name: 'Ada' })
+        .expect(201);
+    }
+
+    // The whole point of phase 2: an account created through the API can now
+    // reach a working login without anyone touching the database.
+    it('completes register → verify → login', async () => {
+      await register();
+
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(403);
+
+      await http()
+        .post('/auth/verify-email')
+        .send({ token: mail.lastVerificationToken() })
+        .expect(204);
+
+      const response = await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('accessToken');
+    });
+
+    it('rejects a token that was already used', async () => {
+      await register();
+      const token = mail.lastVerificationToken();
+
+      await http().post('/auth/verify-email').send({ token }).expect(204);
+      await http().post('/auth/verify-email').send({ token }).expect(400);
+    });
+
+    it('rejects a token nobody issued', async () => {
+      await http()
+        .post('/auth/verify-email')
+        .send({ token: 'not-a-real-token' })
+        .expect(400);
+    });
+
+    // Purpose confusion. A verification token is trivially obtainable — type
+    // any address into /auth/register — and lasts 24h. If the reset flow
+    // accepted it, that would be account takeover by design.
+    it('will not accept a verification token as a password reset', async () => {
+      await register();
+      const verificationToken = mail.lastVerificationToken();
+
+      await http()
+        .post('/auth/reset-password')
+        .send({ token: verificationToken, newPassword: 'attacker password' })
+        .expect(400);
+
+      // The rejected attempt must not have spent the token either — purpose is
+      // checked before consuming. Otherwise submitting someone's verification
+      // token to the reset endpoint would be a way to burn their link and lock
+      // them out of activating their account.
+      await http()
+        .post('/auth/verify-email')
+        .send({ token: verificationToken })
+        .expect(204);
+
+      // And the attacker's password was never set.
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: 'attacker password' })
+        .expect(401);
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(200);
+    });
+  });
+
+  describe('POST /auth/resend-verification', () => {
+    it('sends a fresh link, retiring the previous one', async () => {
+      await http()
+        .post('/auth/register')
+        .send({ email: EMAIL, password: PASSWORD, name: 'Ada' })
+        .expect(201);
+      const first = mail.lastVerificationToken();
+
+      await http()
+        .post('/auth/resend-verification')
+        .send({ email: EMAIL })
+        .expect(204);
+      const second = mail.lastVerificationToken();
+
+      expect(second).not.toBe(first);
+
+      // Only the newest link works: a mailbox with three links is not three
+      // live keys.
+      await http()
+        .post('/auth/verify-email')
+        .send({ token: first })
+        .expect(400);
+      await http()
+        .post('/auth/verify-email')
+        .send({ token: second })
+        .expect(204);
+    });
+
+    it('answers identically for an address with no account', async () => {
+      const known = await http()
+        .post('/auth/resend-verification')
+        .send({ email: EMAIL })
+        .expect(204);
+
+      await http()
+        .post('/auth/register')
+        .send({ email: EMAIL, password: PASSWORD, name: 'Ada' })
+        .expect(201);
+
+      const unknown = await http()
+        .post('/auth/resend-verification')
+        .send({ email: 'nobody@example.com' })
+        .expect(204);
+
+      expect(unknown.body).toEqual(known.body);
+      expect(
+        mail.verificationEmails.filter((e) => e.to === 'nobody@example.com'),
+      ).toHaveLength(0);
+    });
+  });
+
+  describe('POST /auth/forgot-password', () => {
+    it('mails a reset link for a real account', async () => {
+      await seedVerifiedUser();
+
+      await http()
+        .post('/auth/forgot-password')
+        .send({ email: EMAIL })
+        .expect(204);
+
+      expect(mail.passwordResetEmails).toHaveLength(1);
+    });
+
+    it('answers an unknown address identically, sending nothing', async () => {
+      await seedVerifiedUser();
+
+      const known = await http()
+        .post('/auth/forgot-password')
+        .send({ email: EMAIL })
+        .expect(204);
+
+      const unknown = await http()
+        .post('/auth/forgot-password')
+        .send({ email: 'nobody@example.com' })
+        .expect(204);
+
+      expect(unknown.body).toEqual(known.body);
+      expect(mail.passwordResetEmails).toHaveLength(1);
+    });
+
+    it('sends nothing for a Google-only account, without saying so', async () => {
+      await createVerifiedUser(prisma, {
+        email: 'google-user@example.com',
+        passwordHash: null,
+      });
+
+      await http()
+        .post('/auth/forgot-password')
+        .send({ email: 'google-user@example.com' })
+        .expect(204);
+
+      expect(mail.passwordResetEmails).toHaveLength(0);
+    });
+  });
+
+  describe('POST /auth/reset-password', () => {
+    async function requestReset(): Promise<string> {
+      await http()
+        .post('/auth/forgot-password')
+        .send({ email: EMAIL })
+        .expect(204);
+
+      return mail.lastPasswordResetToken();
+    }
+
+    it('changes the password and lets the new one in', async () => {
+      await seedVerifiedUser();
+      const token = await requestReset();
+
+      await http()
+        .post('/auth/reset-password')
+        .send({ token, newPassword: 'a whole new password' })
+        .expect(204);
+
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: PASSWORD })
+        .expect(401);
+
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: 'a whole new password' })
+        .expect(200);
+    });
+
+    // A reset usually means the account is already compromised. Leaving live
+    // sessions would change the lock with the intruder still inside.
+    it('signs every existing session out', async () => {
+      await seedVerifiedUser();
+      const phone = await login();
+      const laptop = await login();
+
+      const token = await requestReset();
+      await http()
+        .post('/auth/reset-password')
+        .send({ token, newPassword: 'a whole new password' })
+        .expect(204);
+
+      await http()
+        .post('/auth/refresh')
+        .send({ refreshToken: phone.refreshToken })
+        .expect(401);
+      await http()
+        .post('/auth/refresh')
+        .send({ refreshToken: laptop.refreshToken })
+        .expect(401);
+    });
+
+    it('rejects a token that was already used', async () => {
+      await seedVerifiedUser();
+      const token = await requestReset();
+
+      await http()
+        .post('/auth/reset-password')
+        .send({ token, newPassword: 'first new password' })
+        .expect(204);
+
+      await http()
+        .post('/auth/reset-password')
+        .send({ token, newPassword: 'second new password' })
+        .expect(400);
+
+      // And the second attempt changed nothing.
+      await http()
+        .post('/auth/login')
+        .send({ email: EMAIL, password: 'first new password' })
+        .expect(200);
+    });
+
+    it('enforces the password policy on the new password', async () => {
+      await seedVerifiedUser();
+      const token = await requestReset();
+
+      await http()
+        .post('/auth/reset-password')
+        .send({ token, newPassword: 'short' })
+        .expect(400);
     });
   });
 

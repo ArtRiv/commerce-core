@@ -1,17 +1,22 @@
 import {
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
+import { VerificationTokenPurpose } from '../generated/prisma/enums';
+import { MAIL_SERVICE, type MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { LoginDto } from './dto/login.dto';
 import type { RegisterDto } from './dto/register.dto';
 import { PasswordService } from './password.service';
 import { RefreshTokenService } from './refresh-token.service';
 import type { TokenPair } from './token-pair';
+import { VerificationTokenService } from './verification-token.service';
 
 export interface RegisteredUser {
   id: string;
@@ -30,11 +35,15 @@ function normalizeEmail(email: string): string {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly passwords: PasswordService,
     private readonly refreshTokens: RefreshTokenService,
+    private readonly verificationTokens: VerificationTokenService,
     private readonly jwt: JwtService,
+    @Inject(MAIL_SERVICE) private readonly mail: MailService,
   ) {}
 
   async register(dto: RegisterDto): Promise<RegisteredUser> {
@@ -48,8 +57,10 @@ export class AuthService {
       }
 
       // Signing up again with an address that never got verified is the "I
-      // forgot I already did this" case, not an error. Phase 2 resends the
-      // verification mail here; either way, no second row.
+      // forgot I already did this" case, not an error: resend the link, no
+      // second row.
+      await this.sendVerificationEmail(existing.id, existing.email);
+
       return { id: existing.id, email: existing.email };
     }
 
@@ -77,7 +88,94 @@ export class AuthService {
       select: { id: true, email: true },
     });
 
+    await this.sendVerificationEmail(user.id, user.email);
+
     return user;
+  }
+
+  /** Confirms an address, which is what unlocks password login. */
+  async verifyEmail(token: string): Promise<void> {
+    const userId = await this.verificationTokens.consume(
+      token,
+      VerificationTokenPurpose.EMAIL_VERIFICATION,
+    );
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { emailVerifiedAt: new Date() },
+    });
+  }
+
+  /**
+   * Always resolves, whatever the address is.
+   *
+   * Nothing is reported back about unknown or already-verified accounts: this
+   * endpoint is public and takes an arbitrary email, so any difference in
+   * response — or in whether mail goes out — is an account-existence check
+   * anyone can run.
+   */
+  async resendVerification(email: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalizeEmail(email) },
+      select: { id: true, email: true, emailVerifiedAt: true },
+    });
+
+    if (!user || user.emailVerifiedAt) {
+      return;
+    }
+
+    await this.sendVerificationEmail(user.id, user.email);
+  }
+
+  /**
+   * Always resolves — see docs/security.md on account enumeration. The caller
+   * cannot tell "sent" from "no such account" from "that account signs in with
+   * Google", because the only honest answer to all three is the same one.
+   */
+  async forgotPassword(email: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalizeEmail(email) },
+      select: { id: true, email: true, passwordHash: true },
+    });
+
+    // No account, or a Google-only one with no password to reset. Sending a
+    // reset link for a password that does not exist would be nonsense, and
+    // saying so would leak how the account signs in.
+    if (!user?.passwordHash) {
+      return;
+    }
+
+    const token = await this.verificationTokens.issue(
+      user.id,
+      VerificationTokenPurpose.PASSWORD_RESET,
+    );
+
+    // Not swallowed, unlike registration's: the entire point of the request was
+    // to send this, and there is no account left half-made if it fails.
+    await this.mail.sendPasswordResetEmail(user.email, token);
+  }
+
+  /**
+   * Sets a new password and signs every session out.
+   *
+   * The revocation is the security-relevant half. Someone resetting a password
+   * is often doing it *because* the account is compromised, so leaving existing
+   * refresh tokens alive would let the intruder keep the session they already
+   * have — the reset would change the lock and leave them inside. This is the
+   * one operation that sweeps every family, not just one.
+   */
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const userId = await this.verificationTokens.consume(
+      token,
+      VerificationTokenPurpose.PASSWORD_RESET,
+    );
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await this.passwords.hash(newPassword) },
+    });
+
+    await this.refreshTokens.revokeAllSessions(userId);
   }
 
   async login(dto: LoginDto): Promise<TokenPair> {
@@ -125,6 +223,39 @@ export class AuthService {
 
   async logout(userId: string, presented: string): Promise<void> {
     await this.refreshTokens.revokeSession(userId, presented);
+  }
+
+  /**
+   * Issues a verification token and mails it, tolerating a mail outage.
+   *
+   * A provider being down must not fail registration: the account is already
+   * valid, and the user can ask for another link. Losing the sign-up because
+   * Resend had a bad minute would be the worse outcome, so the send is logged
+   * and swallowed.
+   *
+   * Only the *send* is forgiven. If issuing the token fails the database is in
+   * trouble, and that error is allowed to surface.
+   */
+  private async sendVerificationEmail(
+    userId: string,
+    email: string,
+  ): Promise<void> {
+    const token = await this.verificationTokens.issue(
+      userId,
+      VerificationTokenPurpose.EMAIL_VERIFICATION,
+    );
+
+    try {
+      await this.mail.sendVerificationEmail(email, token);
+    } catch (error: unknown) {
+      // No token in the log — a live credential in a log file defeats the point
+      // of only ever storing its hash.
+      this.logger.error(
+        `Could not send a verification email to user ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /** Identity only — see docs/specs/auth.md on why no role rides along. */

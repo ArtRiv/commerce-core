@@ -11,6 +11,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { PasswordService } from './password.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { VerificationTokenService } from './verification-token.service';
 
 const DEFAULT_ACCESS_TOKEN_TTL = '15m';
 
@@ -40,6 +41,7 @@ const DEFAULT_ACCESS_TOKEN_TTL = '15m';
     AuthService,
     PasswordService,
     RefreshTokenService,
+    VerificationTokenService,
     JwtStrategy,
     // Order matters: Nest runs global guards in registration order, so
     // authentication populates request.user before authorization reads it.
