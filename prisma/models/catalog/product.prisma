@@ -1,0 +1,46 @@
+/// Lifecycle of a product. The public storefront only ever sees ACTIVE;
+/// DRAFT and ARCHIVED require the products.read permission. There is no
+/// hard delete — orders will reference products, so DELETE archives.
+/// See docs/specs/catalog.md.
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model Product {
+  id String @id @default(uuid())
+
+  name String
+
+  /// URL identity for storefronts. Unique, generated from the name when not
+  /// provided. Mutable — the immutable id is the stable alternative for links
+  /// that must not break.
+  slug String @unique
+
+  description String?
+
+  /// Integer cents, always > 0 (enforced at the DTO). Never a float: money
+  /// arithmetic in floats drifts, and Postgres NUMERIC buys nothing here
+  /// while a single currency (BRL) is all v1 supports.
+  priceCents Int @map("price_cents")
+
+  /// Plain URLs; upload/storage is out of v1's scope (docs/specs/catalog.md).
+  imageUrls String[] @map("image_urls")
+
+  status ProductStatus @default(DRAFT)
+
+  /// Simple stock control: one count per product (no variants in v1).
+  /// Never negative — decrements happen as a conditional UPDATE in
+  /// StockService so a race for the last unit is settled by Postgres,
+  /// not by application-side check-then-write.
+  stockQuantity Int @default(0) @map("stock_quantity")
+
+  categories ProductCategory[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("products")
+}

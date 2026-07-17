@@ -1,0 +1,21 @@
+/// Explicit join table instead of Prisma's implicit many-to-many, for two
+/// reasons: the table gets a predictable name (product_categories) matching
+/// the repo's snake_case convention, and the RLS migration can target it —
+/// every table Supabase exposes needs RLS enabled, implicit ones included,
+/// so better to own the name.
+///
+/// Cascade on both sides: deleting a category detaches its products (the
+/// products themselves survive), and archiving — not deleting — is the
+/// product lifecycle, so product-side cascade only fires if a row is ever
+/// removed manually.
+model ProductCategory {
+  productId String @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  categoryId String   @map("category_id")
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, categoryId])
+  @@index([categoryId])
+  @@map("product_categories")
+}
