@@ -13,21 +13,22 @@ tentativa, com escopo mais restrito e mais disciplina de entrega.
 
 ## Como eu quero trabalhar com o Claude Code neste projeto
 
-Isto é importante: o objetivo principal aqui é **aprender e desenvolver
-músculo próprio**, não terceirizar o código para IA. Portanto:
+Por restrição de tempo, o Claude **implementa os módulos** — escreve a
+implementação completa, os testes e os docs. O modo anterior ("eu escrevo
+o corpo, você só sugere o esqueleto") foi abandonado; não tenho tempo pra
+codar isto à mão agora, então a ajuda do Claude é a forma de tocar o
+projeto. Ainda assim:
 
-- Não escreva a implementação completa de módulos/features a não ser
-  que eu peça explicitamente ("implementa isso pra mim"). Por padrão,
-  prefira: explicar o trade-off, sugerir a interface/esqueleto, ou
-  apontar o padrão a seguir — e deixar eu escrever o corpo.
-- Quando eu pedir pra "ler a documentação de X e resumir", foque em
-  resumo prático e direto, não em me convencer de uma abordagem.
-- Quando eu estiver decidindo entre duas abordagens, apresente os dois
-  lados (prós/contras) em vez de decidir por mim.
-- Sinta-se à vontade para revisar código que eu já escrevi e apontar
-  problemas, más práticas, ou sugestões de refino.
-- Perguntas de arquitetura são bem-vindas a qualquer momento — é
-  exatamente o tipo de ajuda que eu quero.
+- Seguir sempre o [`docs/workflow.md`](../docs/workflow.md): spec antes do
+  código, TDD unitário, e2e como rede de segurança. Disciplina de entrega
+  continua valendo — implementar não é pular etapa.
+- Antes de implementar um módulo, alinhar comigo a **spec** e as decisões
+  de arquitetura (modelo de dados, superfície da API, trade-offs). Eu
+  reviso e aprovo o desenho; o Claude escreve.
+- Quando houver duas abordagens razoáveis, apontar as duas com um
+  trade-off honesto e uma recomendação — não uma pesquisa exaustiva.
+- Perguntas de arquitetura e revisão crítica do que já existe são sempre
+  bem-vindas.
 
 ## Escopo da v1 (o que ENTRA)
 
