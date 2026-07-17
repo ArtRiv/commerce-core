@@ -58,8 +58,8 @@ interface UpdateManyArgs {
   data: { revokedAt: Date };
 }
 
-function createPrismaMock() {
-  const refreshToken = {
+function createTokenTable() {
+  return {
     findUnique: jest.fn<Promise<StoredToken | null>, [FindUniqueArgs]>(),
     create: jest.fn<Promise<unknown>, [CreateArgs]>().mockResolvedValue({}),
     update: jest.fn<Promise<unknown>, [UpdateArgs]>().mockResolvedValue({}),
@@ -67,31 +67,42 @@ function createPrismaMock() {
       .fn<Promise<unknown>, [UpdateManyArgs]>()
       .mockResolvedValue({ count: 0 }),
   };
+}
+
+/**
+ * The transaction scope is a *separate* mock from the client, mirroring the
+ * real Prisma API, so a test can tell which side of the transaction boundary a
+ * write landed on.
+ *
+ * This distinction is not academic. These tests originally shared one mock
+ * between both, and passed against a version of `rotate` that revoked the
+ * family inside the transaction and then threw — which Prisma rolls back, so
+ * the revocation never survived. The suite was green and the theft defence did
+ * nothing; the e2e caught it. A mock that cannot express "this write was rolled
+ * back" cannot fail that bug.
+ */
+function createPrismaMock() {
+  const tx = { refreshToken: createTokenTable() };
 
   const client: {
-    refreshToken: typeof refreshToken;
+    refreshToken: ReturnType<typeof createTokenTable>;
     $transaction: jest.Mock;
   } = {
-    refreshToken,
+    refreshToken: createTokenTable(),
     $transaction: jest.fn(),
   };
 
-  // The real $transaction hands the callback a scoped client. Passing the same
-  // mock straight through keeps assertions simple; that this genuinely runs in
-  // one transaction is proven by the e2e replay test, not here.
-  // Assigned after construction because the implementation closes over `client`
-  // itself, which it cannot do from inside its own initializer.
-  client.$transaction.mockImplementation((cb: (tx: unknown) => unknown) =>
-    cb(client),
+  client.$transaction.mockImplementation((cb: (scope: typeof tx) => unknown) =>
+    cb(tx),
   );
 
-  return client;
+  return { client, tx };
 }
 
 type PrismaMock = ReturnType<typeof createPrismaMock>;
 
-function serviceWith(prisma: PrismaMock): RefreshTokenService {
-  return new RefreshTokenService(prisma as unknown as PrismaService);
+function serviceWith({ client }: PrismaMock): RefreshTokenService {
+  return new RefreshTokenService(client as unknown as PrismaService);
 }
 
 describe('RefreshTokenService', () => {
@@ -99,7 +110,7 @@ describe('RefreshTokenService', () => {
     it('stores only a hash, never the token itself', async () => {
       const prisma = createPrismaMock();
       const token = await serviceWith(prisma).issueForNewSession('user-1');
-      const [{ data }] = prisma.refreshToken.create.mock.calls[0];
+      const [{ data }] = prisma.client.refreshToken.create.mock.calls[0];
 
       expect(data.tokenHash).toBe(sha256(token));
       expect(JSON.stringify(data)).not.toContain(token);
@@ -123,7 +134,7 @@ describe('RefreshTokenService', () => {
       await service.issueForNewSession('user-1');
       await service.issueForNewSession('user-1');
 
-      const [[first], [second]] = prisma.refreshToken.create.mock.calls;
+      const [[first], [second]] = prisma.client.refreshToken.create.mock.calls;
 
       expect(first.data.familyId).not.toBe(second.data.familyId);
     });
@@ -132,7 +143,7 @@ describe('RefreshTokenService', () => {
       const prisma = createPrismaMock();
       await serviceWith(prisma).issueForNewSession('user-1');
 
-      const [{ data }] = prisma.refreshToken.create.mock.calls[0];
+      const [{ data }] = prisma.client.refreshToken.create.mock.calls[0];
       const days = (data.expiresAt.getTime() - Date.now()) / 86_400_000;
 
       expect(days).toBeCloseTo(7, 1);
@@ -142,25 +153,25 @@ describe('RefreshTokenService', () => {
   describe('rotate', () => {
     it('looks the token up by hash, not by its plaintext', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(storedToken());
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(storedToken());
 
       await serviceWith(prisma).rotate('presented-token');
 
-      const [args] = prisma.refreshToken.findUnique.mock.calls[0];
+      const [args] = prisma.tx.refreshToken.findUnique.mock.calls[0];
       expect(args.where.tokenHash).toBe(sha256('presented-token'));
     });
 
     it('consumes the presented token and replaces it within the same family', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(storedToken());
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(storedToken());
 
       const result = await serviceWith(prisma).rotate('presented-token');
 
-      const [consumed] = prisma.refreshToken.update.mock.calls[0];
+      const [consumed] = prisma.tx.refreshToken.update.mock.calls[0];
       expect(consumed.where.id).toBe('token-1');
       expect(consumed.data.consumedAt).toBeInstanceOf(Date);
 
-      const [{ data }] = prisma.refreshToken.create.mock.calls[0];
+      const [{ data }] = prisma.tx.refreshToken.create.mock.calls[0];
       expect(data.familyId).toBe('family-1');
       expect(data.tokenHash).toBe(sha256(result.refreshToken));
       expect(result.userId).toBe('user-1');
@@ -168,36 +179,36 @@ describe('RefreshTokenService', () => {
 
     it('rejects a token that does not exist', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(null);
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(null);
 
       await expect(serviceWith(prisma).rotate('nope')).rejects.toThrow(
         UnauthorizedException,
       );
-      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+      expect(prisma.tx.refreshToken.create).not.toHaveBeenCalled();
     });
 
     it('rejects an expired token', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(
         storedToken({ expiresAt: new Date(Date.now() - 1000) }),
       );
 
       await expect(
         serviceWith(prisma).rotate('presented-token'),
       ).rejects.toThrow(UnauthorizedException);
-      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+      expect(prisma.tx.refreshToken.create).not.toHaveBeenCalled();
     });
 
     it('rejects a revoked token without treating it as theft', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(
         storedToken({ revokedAt: new Date() }),
       );
 
       await expect(
         serviceWith(prisma).rotate('presented-token'),
       ).rejects.toThrow(UnauthorizedException);
-      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+      expect(prisma.tx.refreshToken.create).not.toHaveBeenCalled();
     });
 
     // The heart of the design. A token that was already spent coming back means
@@ -209,7 +220,7 @@ describe('RefreshTokenService', () => {
     // valid, so we would log out the victim and leave the attacker in.
     it('revokes the entire family when a consumed token is replayed', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(
         storedToken({ consumedAt: new Date(Date.now() - 5000) }),
       );
 
@@ -217,15 +228,33 @@ describe('RefreshTokenService', () => {
         serviceWith(prisma).rotate('presented-token'),
       ).rejects.toThrow(UnauthorizedException);
 
-      const [revoke] = prisma.refreshToken.updateMany.mock.calls[0];
+      const [revoke] = prisma.client.refreshToken.updateMany.mock.calls[0];
       expect(revoke.where.familyId).toBe('family-1');
       expect(revoke.data.revokedAt).toBeInstanceOf(Date);
-      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+      expect(prisma.tx.refreshToken.create).not.toHaveBeenCalled();
+    });
+
+    // Regression, found by the e2e suite and invisible to these tests until the
+    // transaction scope became its own mock. Revoking inside the transaction
+    // and then throwing rolls the revocation back, so the theft response was a
+    // 401 and nothing else: every stolen token stayed live.
+    it('revokes outside the transaction, so the throw cannot roll it back', async () => {
+      const prisma = createPrismaMock();
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(
+        storedToken({ consumedAt: new Date() }),
+      );
+
+      await expect(
+        serviceWith(prisma).rotate('presented-token'),
+      ).rejects.toThrow(UnauthorizedException);
+
+      expect(prisma.tx.refreshToken.updateMany).not.toHaveBeenCalled();
+      expect(prisma.client.refreshToken.updateMany).toHaveBeenCalled();
     });
 
     it('leaves other families alone when revoking for theft', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(
+      prisma.tx.refreshToken.findUnique.mockResolvedValue(
         storedToken({ consumedAt: new Date() }),
       );
 
@@ -235,7 +264,7 @@ describe('RefreshTokenService', () => {
 
       // Scoped by family, never by userId: a theft on one device must not sign
       // the user out of their others.
-      const [revoke] = prisma.refreshToken.updateMany.mock.calls[0];
+      const [revoke] = prisma.client.refreshToken.updateMany.mock.calls[0];
       expect(revoke.where).not.toHaveProperty('userId');
     });
   });
@@ -243,35 +272,35 @@ describe('RefreshTokenService', () => {
   describe('revokeSession', () => {
     it('revokes the family the presented token belongs to', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(storedToken());
+      prisma.client.refreshToken.findUnique.mockResolvedValue(storedToken());
 
       await serviceWith(prisma).revokeSession('user-1', 'presented-token');
 
-      const [revoke] = prisma.refreshToken.updateMany.mock.calls[0];
+      const [revoke] = prisma.client.refreshToken.updateMany.mock.calls[0];
       expect(revoke.where.familyId).toBe('family-1');
     });
 
     it('ignores a token belonging to a different user', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(
+      prisma.client.refreshToken.findUnique.mockResolvedValue(
         storedToken({ userId: 'someone-else' }),
       );
 
       await serviceWith(prisma).revokeSession('user-1', 'presented-token');
 
-      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
+      expect(prisma.client.refreshToken.updateMany).not.toHaveBeenCalled();
     });
 
     it('is idempotent for an unknown token', async () => {
       const prisma = createPrismaMock();
-      prisma.refreshToken.findUnique.mockResolvedValue(null);
+      prisma.client.refreshToken.findUnique.mockResolvedValue(null);
 
       // Logging out twice, or with a stale token, is not an error worth
       // reporting — and a distinct error would confirm whether a token exists.
       await expect(
         serviceWith(prisma).revokeSession('user-1', 'nope'),
       ).resolves.toBeUndefined();
-      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
+      expect(prisma.client.refreshToken.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -281,7 +310,7 @@ describe('RefreshTokenService', () => {
 
       await serviceWith(prisma).revokeAllSessions('user-1');
 
-      const [revoke] = prisma.refreshToken.updateMany.mock.calls[0];
+      const [revoke] = prisma.client.refreshToken.updateMany.mock.calls[0];
       expect(revoke.where.userId).toBe('user-1');
       expect(revoke.where.revokedAt).toBeNull();
       expect(revoke.data.revokedAt).toBeInstanceOf(Date);

@@ -16,6 +16,16 @@ export interface RotatedToken {
 /** Any client that can write tokens — the real one or a transaction scope. */
 type TokenClient = Prisma.TransactionClient;
 
+/**
+ * What the rotation transaction found. A replay is *reported* rather than
+ * thrown, so that the family sweep it triggers happens after the transaction
+ * commits instead of being rolled back by the throw. See `rotate`.
+ */
+type RotationOutcome =
+  | { kind: 'rotated'; userId: string; refreshToken: string }
+  | { kind: 'replayed'; familyId: string }
+  | { kind: 'rejected' };
+
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
@@ -49,42 +59,64 @@ export class RefreshTokenService {
    * thief rotated first, their token is a *descendant* of it and stays valid,
    * so we would evict the victim and leave the attacker signed in.
    *
-   * All of it runs in one transaction. Split across statements, two concurrent
-   * replays could both read `consumedAt: null` before either wrote, and both
-   * would be issued live tokens.
+   * The consume-and-reissue pair runs in one transaction: split across
+   * statements, two concurrent refreshes could both read `consumedAt: null`
+   * before either wrote, and both would walk away with live tokens.
+   *
+   * The transaction *reports* a replay rather than throwing from inside it, and
+   * the revocation happens out here. Prisma rolls an interactive transaction
+   * back when its callback throws, so revoking and then throwing in the same
+   * callback would undo the revocation on the way out — the theft would be
+   * detected, announced with a 401, and then quietly forgiven.
    */
-  rotate(presented: string): Promise<RotatedToken> {
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.refreshToken.findUnique({
-        where: { tokenHash: hashToken(presented) },
-      });
+  async rotate(presented: string): Promise<RotatedToken> {
+    const outcome = await this.prisma.$transaction(
+      async (tx): Promise<RotationOutcome> => {
+        const existing = await tx.refreshToken.findUnique({
+          where: { tokenHash: hashToken(presented) },
+        });
 
-      if (!existing) {
-        throw new UnauthorizedException();
-      }
+        if (!existing) {
+          return { kind: 'rejected' };
+        }
 
-      if (existing.consumedAt) {
-        await this.revokeFamily(tx, existing.familyId);
-        throw new UnauthorizedException();
-      }
+        // Checked before expiry/revocation: a consumed token is a theft signal
+        // whether or not it was later revoked, and must still trigger a sweep.
+        if (existing.consumedAt) {
+          return { kind: 'replayed', familyId: existing.familyId };
+        }
 
-      // Checked after the replay case on purpose: a consumed token is a theft
-      // signal whether or not it was later revoked, and it should still trigger
-      // the sweep.
-      if (existing.revokedAt || existing.expiresAt.getTime() <= Date.now()) {
-        throw new UnauthorizedException();
-      }
+        if (existing.revokedAt || existing.expiresAt.getTime() <= Date.now()) {
+          return { kind: 'rejected' };
+        }
 
-      await tx.refreshToken.update({
-        where: { id: existing.id },
-        data: { consumedAt: new Date() },
-      });
+        await tx.refreshToken.update({
+          where: { id: existing.id },
+          data: { consumedAt: new Date() },
+        });
 
-      return {
-        userId: existing.userId,
-        refreshToken: await this.issue(tx, existing.userId, existing.familyId),
-      };
-    });
+        return {
+          kind: 'rotated',
+          userId: existing.userId,
+          refreshToken: await this.issue(
+            tx,
+            existing.userId,
+            existing.familyId,
+          ),
+        };
+      },
+    );
+
+    if (outcome.kind === 'replayed') {
+      await this.revokeFamily(this.prisma, outcome.familyId);
+      throw new UnauthorizedException();
+    }
+
+    if (outcome.kind === 'rejected') {
+      throw new UnauthorizedException();
+    }
+
+    return { userId: outcome.userId, refreshToken: outcome.refreshToken };
   }
 
   /**

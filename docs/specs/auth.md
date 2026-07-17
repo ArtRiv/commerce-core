@@ -71,6 +71,11 @@ token JWT de vida curta + refresh token rotativo de uso único.
   precisa (`@RequirePermissions(PERMISSIONS.ORDERS_REFUND)`) e continua
   correta quando a definição de um papel muda. Checar papel direto na
   rota acopla a rota à tabela de papéis.
+- E-mail é normalizado (trim + lowercase) na escrita e na busca. Índice
+  único do Postgres é case-sensitive, então sem isso
+  `Ada@example.com` e `ada@example.com` viram duas contas pra mesma
+  caixa — e o auto-link do Google, que devolve o endereço minúsculo,
+  não acharia a conta existente.
 - Senha nunca é armazenada em texto puro — hash com `argon2id`.
 - `passwordHash` é **opcional**: conta criada via Google nunca definiu
   senha. Login por senha numa conta sem hash falha com o mesmo erro
@@ -157,18 +162,24 @@ class ResetPasswordDto {
 
 ## Critérios de aceitação
 
-- [ ] Dado um e-mail novo, quando registro com senha, então a conta é
+Legenda: `[x]` entregue e coberto por teste, `[~]` parcial (o que falta
+está anotado no item), `[ ]` fase 2. Os itens marcados são cobertos por
+`test/auth.e2e-spec.ts` no nível HTTP, mais os unitários ao lado do
+código.
+
+- [~] Dado um e-mail novo, quando registro com senha, então a conta é
       criada com `emailVerifiedAt = null` e um e-mail de verificação é
-      disparado.
-- [ ] Dado um e-mail não verificado, quando tento logar com
+      disparado. — conta criada e não-verificada: OK (fase 1). Disparo do
+      e-mail: fase 2.
+- [x] Dado um e-mail não verificado, quando tento logar com
       e-mail/senha, então o login é rejeitado (401/403, mensagem clara
       de "verifique seu e-mail").
 - [ ] Dado o token de verificação correto, quando chamo
       `/auth/verify-email`, então `emailVerifiedAt` é preenchido e o
       login por senha passa a funcionar.
-- [ ] Dado um e-mail verificado e senha correta, quando faço login,
+- [x] Dado um e-mail verificado e senha correta, quando faço login,
       então recebo `accessToken` + `refreshToken` válidos.
-- [ ] Dado um e-mail verificado e senha errada, quando faço login,
+- [x] Dado um e-mail verificado e senha errada, quando faço login,
       então recebo erro, sem indicar se o problema foi o e-mail ou a
       senha (não vazar qual dos dois está errado).
 - [ ] Dado um usuário que nunca logou, quando completa o fluxo do
@@ -177,13 +188,13 @@ class ResetPasswordDto {
 - [ ] Dado um usuário já cadastrado por e-mail/senha, quando completa
       o fluxo do Google OAuth com o mesmo e-mail, então nenhuma conta
       duplicada é criada — a conta existente é vinculada.
-- [ ] Dado um refresh token válido e não usado, quando chamo
+- [x] Dado um refresh token válido e não usado, quando chamo
       `/auth/refresh`, então recebo um novo par de tokens e o token
       antigo deixa de funcionar.
-- [ ] Dado um refresh token já consumido, quando é reapresentado em
+- [x] Dado um refresh token já consumido, quando é reapresentado em
       `/auth/refresh`, então toda a família de tokens da sessão é
       revogada e a resposta é de erro.
-- [ ] Dado um usuário autenticado, quando chama `/auth/logout`, então
+- [x] Dado um usuário autenticado, quando chama `/auth/logout`, então
       a família de refresh token atual é revogada (um refresh
       subsequente falha).
 - [ ] Dado um usuário com role `customer`, quando acessa uma rota
