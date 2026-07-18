@@ -10,10 +10,10 @@ reset de senha e rate limiting — o fluxo `registro → verificar → login`
 fecha inteiro pela API, sem ninguém tocar no banco. **Fase 3**: Google
 OAuth com auto-link.
 
-Todos os critérios de aceitação estão marcados, menos um: o de RBAC
-(403 numa rota protegida), que só dá pra fechar quando existir uma rota
-protegida — nenhum módulo de domínio nasceu ainda. A lógica do guard tem
-teste unitário.
+Todos os critérios de aceitação estão marcados. O último a fechar foi o
+de RBAC (403 numa rota protegida), que precisava esperar a primeira rota
+de domínio existir — fechou junto com o módulo catalog
+([spec](catalog.md)), coberto em `test/catalog.e2e-spec.ts`.
 
 ### Buracos de cobertura conhecidos
 
@@ -268,9 +268,13 @@ código.
 - [x] Dado um usuário autenticado, quando chama `/auth/logout`, então
       a família de refresh token atual é revogada (um refresh
       subsequente falha).
-- [ ] Dado um usuário com role `customer`, quando acessa uma rota
-      protegida com `@RequirePermissions(PERMISSIONS.ORDERS_REFUND)`,
-      então recebe 403.
+- [x] Dado um usuário com role `customer`, quando acessa uma rota
+      protegida com `@RequirePermissions(...)`, então recebe 403.
+      (Fechado pelo módulo catalog: a rota real é `POST /products` com
+      `PRODUCTS_CREATE` — a spec original citava `ORDERS_REFUND` como
+      exemplo hipotético, orders ainda não existia. Coberto em
+      `test/catalog.e2e-spec.ts`, incluindo a variação operator: tem
+      `products.read`, toma 403 no create.)
 - [x] Dado um e-mail de conta existente, quando chamo
       `/auth/forgot-password`, então um e-mail com link de reset é
       disparado e a resposta da API não revela se a conta existe.

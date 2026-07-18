@@ -26,6 +26,7 @@ flowchart LR
 
     auth --> prisma
     auth --> mail
+    catalog --> prisma
 
     auth -.-> common
     catalog -.-> common
@@ -38,17 +39,22 @@ flowchart LR
 
 - `orders` é o orquestrador: conhece `catalog` (checar produto/estoque),
   `payments` (cobrar) e `shipping` (calcular frete). Nenhum desses três
-  conhece `orders` de volta.
+  conhece `orders` de volta. O contrato do lado de `catalog` já existe:
+  `CatalogModule` exporta `ProductsService` (ler o que está sendo
+  comprado) e `StockService` (`decrement`, o UPDATE condicional atômico
+  do checkout) — `orders` nunca toca nas tabelas do catálogo.
 - `catalog`, `payments` e `shipping` não se conhecem entre si.
 - `auth` não depende de nenhum módulo de domínio. Os outros módulos
   usam `auth` só através de decorators (`@Public()`,
-  `@RequirePermissions(...)`, `@CurrentUser()`), nunca importando
+  `@RequirePermissions(...)`, `@CurrentUser()`) e do
+  `OptionalJwtAuthGuard` (rota pública que enxerga mais quando o caller
+  prova quem é — caso das leituras do catálogo), nunca importando
   serviços internos de `auth` diretamente — por isso não aparece como
   seta sólida saindo deles.
 - `prisma` é infraestrutura, não domínio: expõe `PrismaService` como
   módulo global. `auth` depende dele de verdade (seta sólida) — lê
-  usuário, papel e refresh token. Módulos de domínio vão depender dele
-  do mesmo jeito conforme nascerem; ele não conhece ninguém de volta.
+  usuário, papel e refresh token — e `catalog` também (produtos,
+  categorias, estoque); ele não conhece ninguém de volta.
 - `mail` é infraestrutura também: expõe uma interface (`MailService`) via
   token, com o adapter do Resend escondido atrás — mesmo padrão de
   `payments`/`shipping`. `auth` depende dela pra verificação de e-mail e

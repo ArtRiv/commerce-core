@@ -2,7 +2,19 @@
 
 ## Status
 
-`in-progress`
+`implementado`
+
+Entregue de uma vez: schema (com RLS deny-all na própria migration),
+serviços de domínio unit-first, superfície HTTP e e2e. Este módulo também
+fechou o critério de RBAC (403) que estava aberto na
+[spec de auth](auth.md) — primeira rota de domínio protegida por
+permissão.
+
+### Buracos de cobertura conhecidos
+
+- O `OptionalJwtAuthGuard` (auth opcional nas leituras públicas) não tem
+  teste unitário próprio — os três caminhos (anônimo, token válido,
+  token inválido oferecido) são exercidos pelo e2e no nível HTTP.
 
 ## Objetivo
 
@@ -190,49 +202,56 @@ Resposta de listagem: `{ items, total, page, perPage }`.
 
 ## Critérios de aceitação
 
-- [ ] Dado um admin autenticado, quando cria um produto válido via
+Todos cobertos por `test/catalog.e2e-spec.ts` no nível HTTP (os de
+estoque concorrente via `StockService` contra o banco real), mais os
+unitários ao lado do código.
+
+- [x] Dado um admin autenticado, quando cria um produto válido via
       `POST /products`, então recebe `201` com o produto criado com
       status `DRAFT` e slug gerado do nome.
-- [ ] Dado um produto com `priceCents <= 0` ou não-inteiro, quando
+- [x] Dado um produto com `priceCents <= 0` ou não-inteiro, quando
       tento criar, então recebo `400` e nada é persistido.
-- [ ] Dado um slug já existente enviado explicitamente, quando tento
+- [x] Dado um slug já existente enviado explicitamente, quando tento
       criar outro produto com ele, então recebo `409`.
-- [ ] Dado um usuário `customer` autenticado (token válido), quando
+- [x] Dado um usuário `customer` autenticado (token válido), quando
       chama `POST /products`, então recebe `403` — fecha o critério de
       RBAC pendente em [auth.md](auth.md).
-- [ ] Dado um request sem token, quando chama `POST /products`, então
+- [x] Dado um request sem token, quando chama `POST /products`, então
       recebe `401`.
-- [ ] Dado um `operator` (tem `products.read`, não tem
+- [x] Dado um `operator` (tem `products.read`, não tem
       `products.create`), quando lista com `?status=all` recebe `200`
       incluindo rascunhos, e quando tenta `POST /products` recebe
       `403`.
-- [ ] Dado um catálogo com produtos `DRAFT`, `ACTIVE` e `ARCHIVED`,
+- [x] Dado um catálogo com produtos `DRAFT`, `ACTIVE` e `ARCHIVED`,
       quando um cliente anônimo chama `GET /products`, então só os
       `ACTIVE` aparecem, paginados.
-- [ ] Dado um cliente anônimo, quando pede `GET /products?status=all`,
+- [x] Dado um cliente anônimo, quando pede `GET /products?status=all`,
       então recebe `403` (filtro de status é privilégio de leitura do
       back-office).
-- [ ] Dado um produto associado a uma categoria, quando listo
+- [x] Dado um produto associado a uma categoria, quando listo
       `GET /products?category=<slug>`, então só produtos daquela
       categoria voltam.
-- [ ] Dado um produto `ACTIVE`, quando chamo `DELETE /products/:id`
+- [x] Dado um produto `ACTIVE`, quando chamo `DELETE /products/:id`
       com `products.delete`, então ele vira `ARCHIVED` e some da
       listagem pública, mas `GET` com `products.read` ainda o encontra.
-- [ ] Dado um produto com estoque 5, quando o back-office define
+- [x] Dado um produto com estoque 5, quando o back-office define
       estoque 12 via `PATCH /products/:id/stock`, então a quantidade
       passa a 12; quantidade negativa → `400`.
-- [ ] Dado um produto com estoque 1, quando dois decrementos
+- [x] Dado um produto com estoque 1, quando dois decrementos
       concorrentes de 1 unidade executam, então exatamente um sucede e
       o estoque termina em 0, nunca negativo (teste do serviço interno
       contra o banco real).
-- [ ] Dado estoque insuficiente, quando `StockService.decrement` é
+- [x] Dado estoque insuficiente, quando `StockService.decrement` é
       chamado, então retorna falha sem alterar nada.
-- [ ] Dado uma categoria com produtos associados, quando ela é
+- [x] Dado uma categoria com produtos associados, quando ela é
       deletada, então os produtos continuam existindo, sem a
       associação.
-- [ ] Dado qualquer tabela nova deste módulo, quando consultada com a
+- [x] Dado qualquer tabela nova deste módulo, quando consultada com a
       anon key do Supabase, então nada é retornado (RLS deny-all —
-      verificado na migration, mesmo padrão do auth).
+      na própria migration, mesmo padrão do auth; confirmado após o
+      deploy pelo security advisor do Supabase: as três tabelas novas
+      aparecem como "RLS enabled, no policies", que é o estado
+      desejado).
 
 ## Edge cases conhecidos
 
