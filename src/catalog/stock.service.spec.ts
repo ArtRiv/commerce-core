@@ -101,5 +101,80 @@ describe('StockService', () => {
         expect(prisma.product.updateMany).not.toHaveBeenCalled();
       },
     );
+
+    it('runs against the given transaction client, not the service client', async () => {
+      const prisma = createPrismaMock();
+      const tx = createPrismaMock();
+      tx.product.updateMany.mockResolvedValue({ count: 1 });
+
+      // Checkout's atomicity hinges on this: order creation and every
+      // decrement must share one transaction, so the caller lends its client.
+      const ok = await serviceWith(prisma).decrement(
+        'product-1',
+        2,
+        tx as unknown as Parameters<StockService['decrement']>[2],
+      );
+
+      expect(ok).toBe(true);
+      expect(tx.product.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.product.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('restock', () => {
+    it('increments unconditionally — archived products take returns too', async () => {
+      const prisma = createPrismaMock();
+      prisma.product.updateMany.mockResolvedValue({ count: 1 });
+
+      await serviceWith(prisma).restock('product-1', 3);
+
+      const [args] = prisma.product.updateMany.mock.calls[0] as [
+        {
+          where: Record<string, unknown>;
+          data: { stockQuantity: { increment: number } };
+        },
+      ];
+      // No status filter: cancelled units physically return to the shelf even
+      // when the product has since been archived — the product just stays out
+      // of the storefront and keeps refusing new sales.
+      expect(args.where).toEqual({ id: 'product-1' });
+      expect(args.data).toEqual({ stockQuantity: { increment: 3 } });
+    });
+
+    it('throws when the product row is missing', async () => {
+      const prisma = createPrismaMock();
+      prisma.product.updateMany.mockResolvedValue({ count: 0 });
+
+      // Unreachable from cancellation (order_items Restrict product deletion),
+      // so a miss here is a caller bug worth crashing on, not a false return.
+      await expect(serviceWith(prisma).restock('ghost', 3)).rejects.toThrow();
+    });
+
+    it.each([0, -1, 1.5])(
+      'refuses quantity %p without touching the database',
+      async (quantity) => {
+        const prisma = createPrismaMock();
+
+        await expect(
+          serviceWith(prisma).restock('product-1', quantity),
+        ).rejects.toThrow();
+        expect(prisma.product.updateMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('runs against the given transaction client, not the service client', async () => {
+      const prisma = createPrismaMock();
+      const tx = createPrismaMock();
+      tx.product.updateMany.mockResolvedValue({ count: 1 });
+
+      await serviceWith(prisma).restock(
+        'product-1',
+        3,
+        tx as unknown as Parameters<StockService['restock']>[2],
+      );
+
+      expect(tx.product.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.product.updateMany).not.toHaveBeenCalled();
+    });
   });
 });
