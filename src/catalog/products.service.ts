@@ -47,7 +47,8 @@ const CATEGORY_INCLUDE = {
   },
 } as const;
 
-interface WithCategoryRows {
+/** Exported only so inferred controller return types can name it (TS4053). */
+export interface WithCategoryRows {
   categories: { category: { id: string; name: string; slug: string } }[];
 }
 
