@@ -1,0 +1,17 @@
+/// One mutable cart per authenticated user (v1 has no guest carts), created
+/// lazily on the first item added. A cart holds no money: items reference
+/// products by id and the price shown is always a live catalog read — value
+/// only exists once checkout freezes it into an Order.
+/// See docs/specs/orders.md.
+model Cart {
+  id     String @id @default(uuid())
+  userId String @unique @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  items CartItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("carts")
+}

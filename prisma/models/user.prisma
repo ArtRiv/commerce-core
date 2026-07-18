@@ -27,6 +27,13 @@ model User {
   permissionsGrantedToUser UserPermission[] @relation("PermissionAssignee")
   permissionsGrantedByUser UserPermission[] @relation("PermissionGranter")
 
+  /// Orders side (docs/specs/orders.md): the cart cascades with the user;
+  /// orders do not — they are financial records, so the FK (default Restrict)
+  /// blocks deleting a user who ever bought anything. Account deletion is not
+  /// a feature yet; when it becomes one, it must decide what to do here.
+  cart   Cart?
+  orders Order[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

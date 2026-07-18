@@ -1,0 +1,20 @@
+/// A line of an order with the purchase-time snapshot: productName and
+/// unitPriceCents are copies, not joins — what the customer bought at the
+/// price they paid. The product FK is traceability only and Restricts
+/// deletion: a financial record holds its product row forever (safe because
+/// the catalog archives instead of deleting).
+model OrderItem {
+  id      String @id @default(uuid())
+  orderId String @map("order_id")
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  productName    String @map("product_name")
+  unitPriceCents Int    @map("unit_price_cents")
+  quantity       Int
+
+  @@unique([orderId, productId])
+  @@map("order_items")
+}
