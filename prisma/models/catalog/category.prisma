@@ -1,0 +1,18 @@
+/// Flat category — no hierarchy in v1 (parentId is a deferred decision,
+/// see docs/specs/catalog.md). Categories have no status: they are only
+/// visible through the products attached to them.
+model Category {
+  id String @id @default(uuid())
+
+  name String
+  slug String @unique
+
+  description String?
+
+  products ProductCategory[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("categories")
+}
