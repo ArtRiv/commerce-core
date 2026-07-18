@@ -232,15 +232,30 @@ export class OrdersService {
   }
 
   async cancel(user: AuthenticatedUser, id: string) {
+    const canReadAll = user.permissions.has(PERMISSIONS.ORDERS_READ);
     const canCancelAny = user.permissions.has(PERMISSIONS.ORDERS_CANCEL);
 
+    // Visibility first, capability second: whoever cannot SEE the order gets
+    // the same 404 as a missing id (nothing to confirm), while someone who
+    // can see it but may not cancel it — an operator with orders.read —
+    // gets an honest 403. Collapsing both into one filter would 404 people
+    // the GET route happily answers.
     const order = await this.prisma.order.findFirst({
-      where: { id, ...(canCancelAny ? {} : { userId: user.id }) },
+      where: {
+        id,
+        ...(canReadAll || canCancelAny ? {} : { userId: user.id }),
+      },
       include: { items: { select: { productId: true, quantity: true } } },
     });
 
     if (!order) {
       throw new NotFoundException('Order not found');
+    }
+
+    if (order.userId !== user.id && !canCancelAny) {
+      throw new ForbiddenException(
+        "Cancelling someone else's order requires the orders.cancel permission",
+      );
     }
 
     await this.prisma.$transaction(async (tx) => {

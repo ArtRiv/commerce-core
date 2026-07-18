@@ -485,6 +485,25 @@ describe('OrdersService', () => {
       expect(mocks.stock.restock).not.toHaveBeenCalled();
     });
 
+    it("403s an operator who can SEE someone else's order but not cancel it", async () => {
+      const mocks = createMocks();
+      // orders.read widens visibility, so the scoped query finds the foreign
+      // order — refusing must then be a 403, not a fake 404: the GET route
+      // already confirms this order exists to this caller.
+      mocks.prisma.order.findFirst.mockResolvedValue(
+        orderRow({ userId: 'user-2' }),
+      );
+
+      await expect(
+        serviceWith(mocks).cancel(
+          userWith([PERMISSIONS.ORDERS_READ]),
+          'order-1',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mocks.prisma.order.updateMany).not.toHaveBeenCalled();
+      expect(mocks.stock.restock).not.toHaveBeenCalled();
+    });
+
     it("404s on someone else's order without orders.cancel", async () => {
       const mocks = createMocks();
       mocks.prisma.order.findFirst.mockResolvedValue(null);
