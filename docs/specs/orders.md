@@ -2,13 +2,34 @@
 
 ## Status
 
-`draft`
+`implementado`
 
 Decisões estruturais alinhadas antes desta spec: carrinho e pedido como
 estruturas separadas; estoque decrementa no checkout; cancelamento só de
-pedido `CREATED` na v1; carrinho exige autenticação. O restante do
-desenho (seam de pagamento, modelo de ownership, snapshot de endereço)
-está registrado aqui pra revisão antes de qualquer código.
+pedido `CREATED` na v1; carrinho exige autenticação.
+
+Entregue de uma vez: schema (com RLS deny-all e CHECKs na própria
+migration), contrato do catálogo ampliado (`decrement` transacional,
+`restock`, `findByIds`), módulo `payments` mínimo (token +
+`FakePaymentProvider`), serviços de domínio unit-first, superfície HTTP
+e e2e (`test/orders.e2e-spec.ts`), incluindo os dois critérios de
+concorrência contra o banco real.
+
+Um refinamento sobre o desenho original, vindo do próprio critério de
+aceitação: cancelar pedido alheio distingue **visibilidade** de
+**capacidade** — quem não enxerga o pedido leva `404`; quem enxerga
+(operator, via `orders.read`) mas não pode cancelar leva `403`.
+
+### Buracos de cobertura conhecidos
+
+- O único provider exercido é o `FakePaymentProvider`, que não falha por
+  construção — o caminho "provider falhou depois da transação de
+  checkout" (pedido sem `paymentRef`) é inalcançável e, portanto, não
+  testado. Vira caso real (e testável) com o Stripe.
+- O critério de RLS foi verificado pelo security advisor do Supabase
+  após o deploy da migration (as quatro tabelas novas aparecem como
+  "RLS enabled, no policies", o estado desejado), não por uma sonda
+  HTTP com a anon key dentro da suíte — mesma postura do catalog.
 
 ## Objetivo
 
@@ -311,73 +332,73 @@ interface PaymentProvider {
 
 Carrinho:
 
-- [ ] Dado um usuário autenticado sem carrinho, quando adiciona um
+- [x] Dado um usuário autenticado sem carrinho, quando adiciona um
       produto `ACTIVE` com quantidade 2, então recebe o carrinho criado
       (lazy) com o item; sem token → `401`.
-- [ ] Dado um item já no carrinho, quando o mesmo produto é adicionado
+- [x] Dado um item já no carrinho, quando o mesmo produto é adicionado
       de novo, então a quantidade soma — não duplica linha.
-- [ ] Dado um produto `DRAFT`, `ARCHIVED` ou inexistente, quando tento
+- [x] Dado um produto `DRAFT`, `ARCHIVED` ou inexistente, quando tento
       adicionar ao carrinho, então recebo `404` e nada muda (o público
       não distingue rascunho de inexistente).
-- [ ] Dado quantidade 0, negativa ou não-inteira, quando adiciono ou
+- [x] Dado quantidade 0, negativa ou não-inteira, quando adiciono ou
       ajusto item, então recebo `400`.
-- [ ] Dado um item no carrinho, quando `PATCH` define quantidade 5,
+- [x] Dado um item no carrinho, quando `PATCH` define quantidade 5,
       então a quantidade é 5 (absoluta); quando `DELETE` no item, ele
       some; quando `DELETE /cart`, o carrinho esvazia.
-- [ ] Dado o carrinho do usuário A, quando o usuário B consulta
+- [x] Dado o carrinho do usuário A, quando o usuário B consulta
       `GET /cart`, então vê só o próprio carrinho — nunca o de A.
-- [ ] Dado um produto no carrinho, quando o preço muda no catálogo,
+- [x] Dado um produto no carrinho, quando o preço muda no catálogo,
       então `GET /cart` mostra o preço novo (preço vivo, sem trava).
 
 Checkout:
 
-- [ ] Dado um carrinho válido, quando faço checkout com endereço, então
+- [x] Dado um carrinho válido, quando faço checkout com endereço, então
       recebo `201` com pedido `CREATED`: itens com snapshot de nome e
       preço, `totalCents` = soma dos subtotais, estoque decrementado,
       carrinho vazio e `paymentRef` preenchido pelo provider fake.
-- [ ] Dado um pedido criado, quando o preço do produto muda no
+- [x] Dado um pedido criado, quando o preço do produto muda no
       catálogo, então o pedido mantém o preço do momento da compra.
-- [ ] Dado um item com estoque insuficiente (ou produto que virou
+- [x] Dado um item com estoque insuficiente (ou produto que virou
       não-`ACTIVE`), quando faço checkout, então recebo `409` apontando
       os `productId` problemáticos e nada mudou: sem pedido, estoque
       intacto, carrinho intacto.
-- [ ] Dado um carrinho vazio (ou inexistente), quando faço checkout,
+- [x] Dado um carrinho vazio (ou inexistente), quando faço checkout,
       então recebo `409`.
-- [ ] Dado dois checkouts concorrentes do mesmo carrinho, quando ambos
+- [x] Dado dois checkouts concorrentes do mesmo carrinho, quando ambos
       executam, então exatamente um pedido é criado — o outro falha com
       `409` (carrinho consumido atomicamente).
 
 Ciclo de vida:
 
-- [ ] Dado um pedido `CREATED`, quando um operator chama `mark-paid`,
+- [x] Dado um pedido `CREATED`, quando um operator chama `mark-paid`,
       então vira `PAID` com `paidAt` preenchido; um customer chamando a
       mesma rota recebe `403`.
-- [ ] Dado um pedido `PAID`, quando `ship`, vira `SHIPPED`; dado
+- [x] Dado um pedido `PAID`, quando `ship`, vira `SHIPPED`; dado
       `SHIPPED`, quando `deliver`, vira `DELIVERED` — cada um com seu
       timestamp; transição com estado de origem errado (ex: `ship` em
       `CREATED`, `mark-paid` em `CANCELLED`) → `409`.
-- [ ] Dado um pedido `CREATED` do próprio cliente, quando ele cancela,
+- [x] Dado um pedido `CREATED` do próprio cliente, quando ele cancela,
       então vira `CANCELLED` e o estoque dos itens é devolvido.
-- [ ] Dado um pedido `PAID` do próprio cliente, quando ele tenta
+- [x] Dado um pedido `PAID` do próprio cliente, quando ele tenta
       cancelar, então recebe `409` (reembolso não existe na v1); cancelar
       `SHIPPED`/`DELIVERED` → `409` mesmo com `orders.cancel`.
-- [ ] Dado um pedido `CREATED` de outro cliente, quando um admin (tem
+- [x] Dado um pedido `CREATED` de outro cliente, quando um admin (tem
       `orders.cancel`) cancela, então funciona — operator (não tem) →
       `403`.
 
 Ownership / listagem:
 
-- [ ] Dado um pedido do usuário A, quando o usuário B pede
+- [x] Dado um pedido do usuário A, quando o usuário B pede
       `GET /orders/:id`, então recebe `404` (não `403` — não confirma
       existência); um operator com `orders.read` recebe `200`.
-- [ ] Dado vários usuários com pedidos, quando um customer lista
+- [x] Dado vários usuários com pedidos, quando um customer lista
       `GET /orders`, então vê só os próprios, paginados; um operator vê
       todos e pode filtrar por `status` e `userId` (filtro `userId` sem
       `orders.read` → `403`).
 
 Infra:
 
-- [ ] Dado qualquer tabela nova deste módulo, quando consultada com a
+- [x] Dado qualquer tabela nova deste módulo, quando consultada com a
       anon key do Supabase, então nada é retornado (RLS deny-all na
       própria migration, mesmo padrão de auth/catalog).
 
