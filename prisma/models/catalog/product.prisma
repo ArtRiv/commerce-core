@@ -38,6 +38,11 @@ model Product {
 
   categories ProductCategory[]
 
+  /// Back-relations for the orders module (docs/specs/orders.md). Order items
+  /// Restrict product deletion — one more reason DELETE archives.
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

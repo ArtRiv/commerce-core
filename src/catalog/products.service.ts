@@ -144,6 +144,31 @@ export class ProductsService {
     return flattenCategories(product);
   }
 
+  /**
+   * Bulk read of the sellable fields, for the orders module (the exported
+   * contract in docs/architecture/modules.md — orders never queries the
+   * products table itself). No status filter and no 404: cart views and
+   * checkout need to see a product that went DRAFT/ARCHIVED to report it,
+   * and which ids are missing is the caller's question to answer.
+   */
+  async findByIds(ids: string[]) {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    return this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        priceCents: true,
+        status: true,
+        stockQuantity: true,
+      },
+    });
+  }
+
   async update(id: string, input: UpdateProductInput) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
 

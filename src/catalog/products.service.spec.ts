@@ -380,4 +380,52 @@ describe('ProductsService', () => {
       expect(prisma.product.update).not.toHaveBeenCalled();
     });
   });
+
+  describe('findByIds', () => {
+    it('returns the sellable snapshot fields for the requested ids, any status', async () => {
+      const prisma = createPrismaMock();
+      const rows = [
+        {
+          id: 'product-1',
+          name: 'Camiseta Azul',
+          slug: 'camiseta-azul',
+          priceCents: 4990,
+          status: ProductStatus.ACTIVE,
+          stockQuantity: 10,
+        },
+        {
+          id: 'product-2',
+          name: 'Caneca',
+          slug: 'caneca',
+          priceCents: 2500,
+          status: ProductStatus.ARCHIVED,
+          stockQuantity: 0,
+        },
+      ];
+      prisma.product.findMany.mockResolvedValue(rows);
+
+      const result = await serviceWith(prisma).findByIds([
+        'product-1',
+        'product-2',
+      ]);
+
+      expect(result).toEqual(rows);
+      const [args] = prisma.product.findMany.mock.calls[0] as [
+        { where: { id: { in: string[] } } },
+      ];
+      // No status filter: this read exists for cart views and checkout, and
+      // both need to SEE a product that went non-ACTIVE to say so — hiding it
+      // here would turn "this item left the catalog" into a silent absence.
+      expect(args.where).toEqual({ id: { in: ['product-1', 'product-2'] } });
+    });
+
+    it('returns an empty list for an empty id list without querying', async () => {
+      const prisma = createPrismaMock();
+
+      const result = await serviceWith(prisma).findByIds([]);
+
+      expect(result).toEqual([]);
+      expect(prisma.product.findMany).not.toHaveBeenCalled();
+    });
+  });
 });

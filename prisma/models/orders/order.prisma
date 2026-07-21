@@ -1,0 +1,52 @@
+/// Lifecycle of an order. Transitions are explicit and one-way:
+/// CREATED → PAID → SHIPPED → DELIVERED, with CREATED → CANCELLED as the only
+/// exit (cancelling a PAID order means refunding, which ships with the real
+/// payments module). Every transition stamps its own timestamp — that is the
+/// v1 audit trail. See docs/specs/orders.md.
+enum OrderStatus {
+  CREATED
+  PAID
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+/// An immutable financial record born at checkout. Items freeze name and
+/// unit price; totalCents is the sum of the frozen subtotals. Catalog price
+/// changes after purchase never touch an existing order, and no endpoint
+/// edits order items.
+model Order {
+  id     String      @id @default(uuid())
+  userId String      @map("user_id")
+  user   User        @relation(fields: [userId], references: [id])
+  status OrderStatus @default(CREATED)
+
+  /// Sum of unitPriceCents × quantity over the items, frozen at checkout.
+  totalCents Int @map("total_cents")
+
+  /// Reference returned by the PaymentProvider (fake_<uuid> until Stripe).
+  /// Written after the checkout transaction commits, hence nullable.
+  paymentRef String? @map("payment_ref")
+
+  /// Shipping address snapshot taken at checkout — same philosophy as price.
+  /// No address book in v1; the ShippingProvider integration comes later.
+  shippingLine1      String  @map("shipping_line1")
+  shippingLine2      String? @map("shipping_line2")
+  shippingCity       String  @map("shipping_city")
+  shippingState      String  @map("shipping_state")
+  shippingPostalCode String  @map("shipping_postal_code")
+
+  paidAt      DateTime? @map("paid_at")
+  shippedAt   DateTime? @map("shipped_at")
+  deliveredAt DateTime? @map("delivered_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([status])
+  @@map("orders")
+}
