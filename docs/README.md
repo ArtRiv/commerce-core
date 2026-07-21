@@ -16,3 +16,8 @@ convenções combinadas para trabalhar com o Claude Code neste repo.
   de qualquer módulo existir; atualize o diagrama sempre que a
   implementação divergir do que está desenhado, pra não virar
   documentação morta.
+- [`known-issues.md`](known-issues.md) — bugs e lacunas encontrados
+  depois que um módulo já foi entregue, aceitos por ora mas não
+  esquecidos. Não é backlog de feature (isso mora nas "decisões
+  adiadas" de cada spec) — é especificamente coisa que está, de algum
+  jeito pequeno, errada.
