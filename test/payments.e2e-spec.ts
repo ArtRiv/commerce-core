@@ -1,9 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 
 import { PasswordService } from '../src/auth/password.service';
 import { OrderStatus, ProductStatus } from '../src/generated/prisma/enums';
+import { RATE_LIMITS } from '../src/orders/rate-limits';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './support/app';
 import { createUserWithRole, resetCatalogTables } from './support/catalog-db';
@@ -225,6 +229,25 @@ describe('Payments (e2e)', () => {
     };
   }
 
+  /**
+   * A real charge.refunded event, captured from Stripe and frozen, with the
+   * payment intent re-pointed at a given order. Faithful to what the gateway
+   * actually sends today (no expanded refunds list, no charge metadata), which
+   * is exactly why the order is found by intent and refundRef comes back null.
+   */
+  function realChargeRefunded(intentRef: string): Record<string, unknown> {
+    const event = JSON.parse(
+      readFileSync(join(__dirname, 'fixtures/charge-refunded.json'), 'utf8'),
+    ) as {
+      id: string;
+      data: { object: { payment_intent: string } };
+    };
+    event.id = nextEventId();
+    event.data.object.payment_intent = intentRef;
+
+    return event;
+  }
+
   /** Pays an order the way a buyer would: on the provider, then a webhook. */
   async function payOrder(order: OrderResponse): Promise<OrderResponse> {
     const sessionId = order.paymentRef;
@@ -357,6 +380,27 @@ describe('Payments (e2e)', () => {
         .send({})
         .expect(200);
     });
+
+    it('rate-limits /pay once the per-minute budget is spent', async () => {
+      await fillCart();
+      const order = await checkout();
+
+      // Issuing a session hits the provider, so the route is throttled. Looping
+      // the configured limit + 1 keeps the test honest if the number changes.
+      let last = 200;
+      for (let i = 0; i < RATE_LIMITS.ISSUE_PAYMENT.limit + 1; i += 1) {
+        last = (
+          await http()
+            .post(`/orders/${order.id}/pay`)
+            .set('Authorization', `Bearer ${customerToken}`)
+            .send({})
+        ).status;
+      }
+
+      // The guard is wired, not just declared: drop @UseGuards(ThrottlerGuard)
+      // and this is the assertion that fails.
+      expect(last).toBe(429);
+    });
   });
 
   describe('webhook', () => {
@@ -369,6 +413,41 @@ describe('Payments (e2e)', () => {
       expect(paid.status).toBe(OrderStatus.PAID);
       expect(paid.paidAt).not.toBeNull();
       expect(paid.paymentIntentRef).toMatch(/^pi_test_/);
+
+      // The audit row keeps the provider's own event name, so the trail can
+      // tell what actually arrived rather than a generic domain label.
+      const recorded = await prisma.paymentEvent.findFirst({
+        where: { orderId: order.id },
+        select: { type: true, processedAt: true },
+      });
+      expect(recorded?.type).toBe('checkout.session.completed');
+      expect(recorded?.processedAt).not.toBeNull();
+    });
+
+    it('processes two simultaneous deliveries of one event exactly once', async () => {
+      await fillCart();
+      const order = await checkout();
+      stripe.markSessionPaid(order.paymentRef ?? '');
+      const event = sessionEvent(
+        'checkout.session.completed',
+        order.paymentRef ?? '',
+      );
+
+      // The event-id primary key is layer one of the idempotency, but two
+      // deliveries can race past the SELECT — so the conditional UPDATE in
+      // markPaid is layer two. Only Postgres can falsify that both hold, which
+      // is why this goes through real HTTP into real transactions, like the
+      // orders double-checkout test.
+      const [a, b] = await Promise.all([deliver(event), deliver(event)]);
+
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      // Exactly one row, and the order paid once: no double markPaid slipped
+      // through the race.
+      expect(await prisma.paymentEvent.count()).toBe(1);
+      const paid = await orderOf(order.id);
+      expect(paid.status).toBe(OrderStatus.PAID);
+      expect(paid.paidAt).not.toBeNull();
     });
 
     it('takes no authentication, unlike the manual mark-paid route', async () => {
@@ -459,6 +538,30 @@ describe('Payments (e2e)', () => {
       expect(after.status).toBe(OrderStatus.CREATED);
       expect(await stockOf(product.id)).toBe(8);
       expect(await prisma.paymentEvent.count()).toBe(1);
+    });
+
+    it('rate-limits the webhook, but generously — a flood, not a sales spike', async () => {
+      // The limit is deliberately high (anti-flood, not anti-guess: there is
+      // nothing to brute-force in an HMAC), so exhausting it means firing the
+      // whole budget plus one. Sequentially rather than in a burst, to avoid a
+      // connection storm — the throttler runs as a guard before the handler, so
+      // an unsigned body still counts, and the over-budget request 429s where a
+      // within-budget one takes the cheap 400 path.
+      let last = 0;
+      for (let i = 0; i < RATE_LIMITS.PAYMENT_WEBHOOK.limit + 1; i += 1) {
+        last = (
+          await http()
+            .post('/payments/webhook')
+            .set('stripe-signature', 'nope')
+            .set('content-type', 'application/json')
+            .send('{}')
+        ).status;
+      }
+
+      // The guard is wired, not just declared. A 429 costs nothing here — the
+      // provider redelivers with backoff — so refusing the overflow is safe;
+      // what must not happen is no limit at all.
+      expect(last).toBe(429);
     });
   });
 
@@ -556,28 +659,30 @@ describe('Payments (e2e)', () => {
     it('follows a refund issued from the provider dashboard', async () => {
       const { order, productId } = await paidOrder();
 
-      // charge.refunded names the intent and nothing of ours — the order is
-      // found through the intent it stored when it was paid.
-      await deliver({
-        id: nextEventId(),
-        object: 'event',
-        type: 'charge.refunded',
-        data: {
-          object: {
-            id: 'ch_test_1',
-            object: 'charge',
-            payment_intent: order.paymentIntentRef,
-            metadata: {},
-            refunds: { data: [{ id: 're_dashboard_1' }] },
-          },
-        },
-      }).expect(200);
+      // A real charge.refunded (frozen fixture) names the intent and nothing of
+      // ours — the order is found through the intent it stored when it was paid.
+      await deliver(realChargeRefunded(order.paymentIntentRef ?? '')).expect(
+        200,
+      );
 
       const refunded = await orderOf(order.id);
       expect(refunded.status).toBe(OrderStatus.REFUNDED);
-      expect(refunded.refundRef).toBe('re_dashboard_1');
+      expect(refunded.refundedAt).not.toBeNull();
+      // Null, faithfully: this API version's charge.refunded carries no refund
+      // id, and the status change is the point. The convenience ref is only
+      // ever set when our own /refund route issues the reversal.
+      expect(refunded.refundRef).toBeNull();
       expect(await stockOf(productId)).toBe(10);
       // Nothing was sent back to the provider: it started this.
+      expect(stripe.refundsIssued).toEqual([]);
+    });
+
+    it('records a dashboard refund even when no order claims the intent', async () => {
+      // Same real event, an intent no order here stored: recorded and 200'd,
+      // never an error the provider would retry.
+      await deliver(realChargeRefunded('pi_belongs_to_no_order')).expect(200);
+
+      expect(await prisma.paymentEvent.count()).toBe(1);
       expect(stripe.refundsIssued).toEqual([]);
     });
   });
