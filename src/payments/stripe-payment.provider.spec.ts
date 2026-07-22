@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type { ConfigService } from '@nestjs/config';
 import type Stripe from 'stripe';
 
@@ -315,6 +318,8 @@ describe('StripePaymentProvider', () => {
 
       expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
         id: 'evt_1',
+        // The gateway's own name rides along for the audit row, untranslated.
+        providerType: 'checkout.session.completed',
         type: 'payment.succeeded',
         orderId: 'order-1',
         paymentIntentRef: 'pi_1',
@@ -340,6 +345,7 @@ describe('StripePaymentProvider', () => {
 
       expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
         id: 'evt_1',
+        providerType: 'checkout.session.completed',
         type: 'ignored',
       });
     });
@@ -361,6 +367,7 @@ describe('StripePaymentProvider', () => {
 
       expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
         id: 'evt_2',
+        providerType: 'checkout.session.async_payment_succeeded',
         type: 'payment.succeeded',
         orderId: 'order-1',
         paymentIntentRef: 'pi_1',
@@ -386,6 +393,7 @@ describe('StripePaymentProvider', () => {
 
       expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
         id: 'evt_3',
+        providerType: stripeType,
         type: domainType,
         orderId: 'order-1',
       });
@@ -408,6 +416,7 @@ describe('StripePaymentProvider', () => {
 
       expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
         id: 'evt_4',
+        providerType: 'charge.refunded',
         type: 'payment.refunded',
         orderId: 'order-1',
         paymentIntentRef: 'pi_1',
@@ -427,6 +436,7 @@ describe('StripePaymentProvider', () => {
 
       expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
         id: 'evt_5',
+        providerType: 'charge.refunded',
         type: 'payment.refunded',
         orderId: null,
         paymentIntentRef: 'pi_1',
@@ -444,7 +454,41 @@ describe('StripePaymentProvider', () => {
 
       expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
         id: 'evt_6',
+        // The whole point of carrying providerType: an ignored event is no
+        // longer an anonymous "ignored" in the audit trail.
+        providerType: 'customer.created',
         type: 'ignored',
+      });
+    });
+
+    it('parses a REAL charge.refunded captured from Stripe (2026-06-24.dahlia)', () => {
+      // test/fixtures/charge-refunded.json was captured with `stripe trigger
+      // charge.refunded` and frozen. It is the reality check on the hand-built
+      // fixtures above: in this API version the event carries neither an
+      // expanded `refunds` list nor charge-level metadata, only payment_intent.
+      // So refundRef is null and orderId is null here — the order is instead
+      // resolved downstream by paymentIntentRef (see PaymentEventsService), and
+      // a null refund ref is fine because the status change is the point.
+      const realEvent: unknown = JSON.parse(
+        readFileSync(
+          join(__dirname, '../../test/fixtures/charge-refunded.json'),
+          'utf8',
+        ),
+      );
+      const intent = (
+        realEvent as { data: { object: { payment_intent: string } } }
+      ).data.object.payment_intent;
+
+      const stripe = createStripeMock();
+      stripe.webhooks.constructEvent.mockReturnValue(realEvent);
+
+      expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
+        id: (realEvent as { id: string }).id,
+        providerType: 'charge.refunded',
+        type: 'payment.refunded',
+        orderId: null,
+        paymentIntentRef: intent,
+        refundRef: null,
       });
     });
   });

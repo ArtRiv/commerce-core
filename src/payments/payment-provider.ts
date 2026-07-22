@@ -42,11 +42,18 @@ export interface PaymentSession {
 /**
  * What a verified webhook turned out to mean, in domain terms.
  *
+ * `type` is the domain outcome, and it is what dispatch switches on. `providerType`
+ * is the gateway's own event name (`checkout.session.completed`, `customer.created`)
+ * carried through untranslated for one purpose: the audit row. Without it every
+ * `ignored` event records as the same useless "ignored", and a table that is
+ * supposed to be a trail of what the provider sent cannot tell a `customer.created`
+ * from a `charge.updated`.
+ *
  * `ignored` is a first-class outcome, not a failure: most of what an account
  * emits is none of this module's business, and it still deserves a recorded,
  * acknowledged 200 rather than an error.
  */
-export type PaymentEvent =
+export type DomainOutcome =
   | {
       id: string;
       type: 'payment.succeeded';
@@ -64,6 +71,8 @@ export type PaymentEvent =
       refundRef: string | null;
     }
   | { id: string; type: 'ignored' };
+
+export type PaymentEvent = { providerType: string } & DomainOutcome;
 
 /** Node's incoming header bag, narrowed to what a verifier needs. */
 export type WebhookHeaders = Record<string, string | string[] | undefined>;

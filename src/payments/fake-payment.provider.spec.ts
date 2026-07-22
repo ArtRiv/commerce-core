@@ -101,6 +101,23 @@ describe('FakePaymentProvider', () => {
         paymentIntentRef: 'fake_pi_1',
       };
 
+      // With no separate provider vocabulary, the domain type doubles as the
+      // audit label.
+      expect(
+        providerWith().parseEvent(Buffer.from(JSON.stringify(event))),
+      ).toEqual({ ...event, providerType: 'payment.succeeded' });
+    });
+
+    it('carries an explicit providerType through when one is given', () => {
+      const event = {
+        id: 'evt_local_2',
+        providerType: 'charge.refunded',
+        type: 'payment.refunded',
+        orderId: 'order-1',
+        paymentIntentRef: 'fake_pi_1',
+        refundRef: 'fake_re_1',
+      };
+
       expect(
         providerWith().parseEvent(Buffer.from(JSON.stringify(event))),
       ).toEqual(event);

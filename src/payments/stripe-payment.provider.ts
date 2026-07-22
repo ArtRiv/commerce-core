@@ -5,6 +5,7 @@ import type Stripe from 'stripe';
 import type {
   CheckoutMode,
   CreatePaymentInput,
+  DomainOutcome,
   PaymentEvent,
   PaymentProvider,
   PaymentSession,
@@ -197,10 +198,12 @@ export class StripePaymentProvider implements PaymentProvider {
       this.webhookSecret,
     );
 
-    return this.toDomainEvent(event);
+    // The provider's own event name rides along untranslated, for the audit
+    // row; the domain classification is what everything else acts on.
+    return { providerType: event.type, ...this.classify(event) };
   }
 
-  private toDomainEvent(event: Stripe.Event): PaymentEvent {
+  private classify(event: Stripe.Event): DomainOutcome {
     switch (event.type) {
       case 'checkout.session.completed':
       case 'checkout.session.async_payment_succeeded': {

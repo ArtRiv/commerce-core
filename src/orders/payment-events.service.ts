@@ -86,7 +86,10 @@ export class PaymentEventsService {
   ): Promise<boolean> {
     try {
       await this.prisma.paymentEvent.create({
-        data: { id: event.id, type: event.type, orderId },
+        // The provider's own event name, not our domain outcome: the audit
+        // trail is more useful naming what actually arrived (charge.refunded,
+        // customer.created) than labelling half the rows "ignored".
+        data: { id: event.id, type: event.providerType, orderId },
       });
 
       return true;

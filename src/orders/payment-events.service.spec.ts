@@ -65,6 +65,7 @@ function serviceWith({ prisma, orders }: Mocks) {
 
 const SUCCEEDED: PaymentEvent = {
   id: 'evt_1',
+  providerType: 'checkout.session.completed',
   type: 'payment.succeeded',
   orderId: 'order-1',
   paymentIntentRef: 'pi_1',
@@ -72,6 +73,7 @@ const SUCCEEDED: PaymentEvent = {
 
 const REFUNDED: PaymentEvent = {
   id: 'evt_2',
+  providerType: 'charge.refunded',
   type: 'payment.refunded',
   orderId: null,
   paymentIntentRef: 'pi_1',
@@ -114,9 +116,10 @@ describe('PaymentEventsService', () => {
     const [created] = mocks.prisma.paymentEvent.create.mock.calls[0] as [
       { data: { id: string; type: string; orderId: string | null } },
     ];
+    // The audit row records the provider's event name, not our domain outcome.
     expect(created.data).toEqual({
       id: 'evt_1',
-      type: 'payment.succeeded',
+      type: 'checkout.session.completed',
       orderId: 'order-1',
     });
     expect(mocks.orders.markPaid).toHaveBeenCalledWith('order-1', 'pi_1');
@@ -221,6 +224,7 @@ describe('PaymentEventsService', () => {
 
       await serviceWith(mocks).handle({
         id: 'evt_9',
+        providerType: `checkout.session.${type === 'payment.failed' ? 'async_payment_failed' : 'expired'}`,
         type,
         orderId: 'order-1',
       });
@@ -237,7 +241,11 @@ describe('PaymentEventsService', () => {
     const mocks = createMocks();
 
     await expect(
-      serviceWith(mocks).handle({ id: 'evt_10', type: 'ignored' }),
+      serviceWith(mocks).handle({
+        id: 'evt_10',
+        providerType: 'customer.created',
+        type: 'ignored',
+      }),
     ).resolves.toBe('processed');
     expect(mocks.orders.markPaid).not.toHaveBeenCalled();
   });

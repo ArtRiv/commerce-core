@@ -112,6 +112,16 @@ export class FakePaymentProvider implements PaymentProvider {
       throw new Error('Body is not a payment event');
     }
 
-    return parsed as PaymentEvent;
+    // Read providerType through a view that admits its absence: the body is a
+    // developer's hand-written event, so unlike the real gateway it may omit it.
+    const view = parsed as { type: string; providerType?: string };
+
+    // No separate provider vocabulary here, so the domain type doubles as the
+    // audit label — a caller may still send an explicit providerType to mimic a
+    // real gateway's naming.
+    return {
+      ...(parsed as PaymentEvent),
+      providerType: view.providerType ?? view.type,
+    };
   }
 }
