@@ -25,7 +25,9 @@ aceitação: cancelar pedido alheio distingue **visibilidade** de
 - O único provider exercido é o `FakePaymentProvider`, que não falha por
   construção — o caminho "provider falhou depois da transação de
   checkout" (pedido sem `paymentRef`) é inalcançável e, portanto, não
-  testado. Vira caso real (e testável) com o Stripe.
+  testado. Vira caso real (e testável) com o Stripe. **Fechado** por
+  [`payments.md`](payments.md), que cobre a falha do provedor no
+  checkout.
 - O critério de RLS foi verificado pelo security advisor do Supabase
   após o deploy da migration (as quatro tabelas novas aparecem como
   "RLS enabled, no policies", o estado desejado), não por uma sonda
@@ -71,10 +73,12 @@ dos outros módulos.
   segura estoque até alguém cancelar (mitigação: cancelar devolve
   estoque, e o operador pode cancelar pedidos velhos manualmente; o job
   de TTL pós-v1 só automatiza esse caminho que já existe)
-- Reembolso (`PAID → CANCELLED`) — cancelar pedido pago significa
-  devolver dinheiro, e isso pertence ao módulo de payments real. A
-  permissão `orders.refund` já existe e fica reservada; a transição
-  entra junto com o Stripe
+- Reembolso — cancelar pedido pago significa devolver dinheiro, e isso
+  pertence ao módulo de payments real. A permissão `orders.refund` já
+  existe e fica reservada; a transição entra junto com o Stripe.
+  **Entregue depois**, em [`payments.md`](payments.md), como
+  `PAID → REFUNDED` (status próprio, não `CANCELLED`: dinheiro que
+  voltou é evento diferente de pedido abandonado)
 - Stripe de verdade — v1 usa `FakePaymentProvider`; o desenho do
   webhook (verificação de assinatura, idempotência de retry) é da spec
   de payments
@@ -111,17 +115,19 @@ dos outros módulos.
 
   ```
   CREATED ──→ PAID ──→ SHIPPED ──→ DELIVERED
-     │
+     │         │
+     │         └──→ REFUNDED
      └──→ CANCELLED
   ```
 
   | Transição             | Quem dispara                                      |
   | --------------------- | ------------------------------------------------- |
   | checkout → `CREATED`  | cliente (próprio carrinho)                        |
-  | `CREATED → PAID`      | confirmação de pagamento (v1: `orders.update_status`) |
+  | `CREATED → PAID`      | confirmação de pagamento (webhook do Stripe ou `orders.update_status` pro registro manual) |
   | `PAID → SHIPPED`      | `orders.update_status`                            |
   | `SHIPPED → DELIVERED` | `orders.update_status`                            |
   | `CREATED → CANCELLED` | cliente (próprio pedido) ou `orders.cancel`       |
+  | `PAID → REFUNDED`     | `orders.refund` — desenho em [`payments.md`](payments.md) |
 
   Qualquer transição fora da tabela → `409`. `SHIPPED` e `DELIVERED`
   nunca são canceláveis. Cada transição preenche seu timestamp — é a
@@ -317,6 +323,11 @@ Resposta de listagem de pedidos: `{ items, total, page, perPage }`.
 
 ### Contrato com payments (v1)
 
+Esta é a forma que orders entregou. A interface cresceu em
+[`payments.md`](payments.md) (sessão com modo, reembolso, expiração e
+parsing de webhook), mas o que orders chama no checkout continua sendo
+`createPayment` — o call site não mudou de forma.
+
 ```ts
 // src/payments — só isto na v1
 interface PaymentProvider {
@@ -380,8 +391,9 @@ Ciclo de vida:
 - [x] Dado um pedido `CREATED` do próprio cliente, quando ele cancela,
       então vira `CANCELLED` e o estoque dos itens é devolvido.
 - [x] Dado um pedido `PAID` do próprio cliente, quando ele tenta
-      cancelar, então recebe `409` (reembolso não existe na v1); cancelar
-      `SHIPPED`/`DELIVERED` → `409` mesmo com `orders.cancel`.
+      cancelar, então recebe `409` (devolver dinheiro é rota própria,
+      atrás de `orders.refund` — ver [`payments.md`](payments.md));
+      cancelar `SHIPPED`/`DELIVERED` → `409` mesmo com `orders.cancel`.
 - [x] Dado um pedido `CREATED` de outro cliente, quando um admin (tem
       `orders.cancel`) cancela, então funciona — operator (não tem) →
       `403`.
@@ -415,7 +427,10 @@ Infra:
   adapter de webhook na spec de payments, não do domínio.
 - Falha do `PaymentProvider` depois da transação de checkout → pedido
   existe sem `paymentRef`. Com o fake é impossível; o tratamento real
-  (retry, reconciliação) entra com o Stripe. Registrado, não resolvido.
+  (retry, reconciliação) entra com o Stripe. ~~Registrado, não
+  resolvido.~~ **Resolvido em [`payments.md`](payments.md)**: o checkout
+  passa a tolerar a falha (pedido nasce sem sessão) e
+  `POST /orders/:id/pay` é o caminho de recuperação.
 - Cancelamento devolvendo estoque de produto `ARCHIVED` → incremento
   acontece mesmo assim (unidades físicas voltaram); o produto continua
   fora da vitrine e recusando vendas novas.
@@ -436,8 +451,8 @@ Infra:
 - **Reserva com TTL** — job em background (BullMQ) pós-v1 cancelando
   `CREATED` velhos automaticamente; usa o mesmo caminho de cancelamento
   já existente.
-- **Reembolso** (`PAID → CANCELLED` + `orders.refund`) — entra com o
-  módulo payments real; a permissão já existe e fica reservada.
+- **Reembolso** (`orders.refund`) — entrou com o módulo payments real,
+  como `PAID → REFUNDED`: ver [`payments.md`](payments.md).
 - **Idempotency key no checkout** (header `Idempotency-Key`) — o
   consumo atômico do carrinho já impede pedido duplo do mesmo carrinho;
   chave explícita vira necessidade quando houver retry de cliente
