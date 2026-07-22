@@ -323,7 +323,9 @@ describe('Orders (e2e)', () => {
 
       expect(order.status).toBe(OrderStatus.CREATED);
       expect(order.totalCents).toBe(4500);
-      expect(order.paymentRef).toMatch(/^fake_/);
+      // A checkout session opened by the provider; what it does after that is
+      // test/payments.e2e-spec.ts's business.
+      expect(order.paymentRef).toMatch(/^cs_test_/);
       expect(order.items).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

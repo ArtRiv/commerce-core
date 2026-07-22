@@ -1,14 +1,19 @@
 /// Lifecycle of an order. Transitions are explicit and one-way:
-/// CREATED → PAID → SHIPPED → DELIVERED, with CREATED → CANCELLED as the only
-/// exit (cancelling a PAID order means refunding, which ships with the real
-/// payments module). Every transition stamps its own timestamp — that is the
-/// v1 audit trail. See docs/specs/orders.md.
+/// CREATED → PAID → SHIPPED → DELIVERED, with CREATED → CANCELLED and
+/// PAID → REFUNDED as the two exits. Every transition stamps its own
+/// timestamp — that is the v1 audit trail. See docs/specs/orders.md.
+///
+/// REFUNDED is deliberately not CANCELLED: money that came back is a
+/// different business event from an unpaid order that was abandoned, and
+/// anything counting cancellations should not have to inspect a refund ref
+/// to tell them apart. See docs/specs/payments.md.
 enum OrderStatus {
   CREATED
   PAID
   SHIPPED
   DELIVERED
   CANCELLED
+  REFUNDED
 }
 
 /// An immutable financial record born at checkout. Items freeze name and
@@ -24,9 +29,31 @@ model Order {
   /// Sum of unitPriceCents × quantity over the items, frozen at checkout.
   totalCents Int @map("total_cents")
 
-  /// Reference returned by the PaymentProvider (fake_<uuid> until Stripe).
-  /// Written after the checkout transaction commits, hence nullable.
+  /// The provider's CHECKOUT SESSION reference (cs_... on Stripe). Written
+  /// after the checkout transaction commits — and left null when the provider
+  /// was unreachable, which is a recoverable state, not a broken one:
+  /// POST /orders/:id/pay issues a session for it later.
   paymentRef String? @map("payment_ref")
+
+  /// Where the customer pays, for hosted checkout. Null in embedded mode —
+  /// there the client needs a client_secret, which is short-lived and
+  /// deliberately never persisted (see docs/specs/payments.md).
+  paymentUrl String? @map("payment_url")
+
+  /// When the current session stops being payable. Lets /orders/:id/pay decide
+  /// between reusing the open session and creating a new one without asking
+  /// the provider — reuse is what stops one order growing two ways to pay it.
+  paymentExpiresAt DateTime? @map("payment_expires_at")
+
+  /// The PaymentIntent (pi_...), known only once payment actually happens.
+  /// Refunds are issued against it, and charge-level webhook events — which
+  /// carry no orderId of ours — find the order through it.
+  paymentIntentRef String? @map("payment_intent_ref")
+
+  /// Set together with status REFUNDED, by either the refund route or the
+  /// charge.refunded webhook (a refund issued from Stripe's dashboard).
+  refundRef  String?   @map("refund_ref")
+  refundedAt DateTime? @map("refunded_at")
 
   /// Shipping address snapshot taken at checkout — same philosophy as price.
   /// No address book in v1; the ShippingProvider integration comes later.
@@ -48,5 +75,8 @@ model Order {
 
   @@index([userId])
   @@index([status])
+  /// charge.refunded carries no orderId, only the intent — this index is how
+  /// that event finds its order.
+  @@index([paymentIntentRef])
   @@map("orders")
 }

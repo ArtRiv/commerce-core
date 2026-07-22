@@ -1,7 +1,9 @@
 import {
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 
 import type { AuthenticatedUser } from '../auth/authenticated-user';
@@ -9,6 +11,7 @@ import { type Permission, PERMISSIONS } from '../auth/authz/permissions';
 import type { ProductsService } from '../catalog/products.service';
 import type { StockService } from '../catalog/stock.service';
 import { OrderStatus, ProductStatus } from '../generated/prisma/enums';
+import type { PaymentSession } from '../payments/payment-provider';
 import type { PrismaService } from '../prisma/prisma.service';
 import { OrdersService, type ShippingAddress } from './orders.service';
 
@@ -25,6 +28,7 @@ interface OrderRow {
   status: OrderStatus;
   totalCents: number;
   paymentRef: string | null;
+  paymentIntentRef: string | null;
   items: {
     productId: string;
     productName: string;
@@ -40,7 +44,23 @@ function orderRow(overrides: Partial<OrderRow> = {}): OrderRow {
     status: OrderStatus.CREATED,
     totalCents: 4500,
     paymentRef: null,
+    paymentIntentRef: null,
     items: [],
+    ...overrides,
+  };
+}
+
+const EXPIRES_AT = new Date('2026-07-22T00:00:00.000Z');
+
+function paymentSession(
+  overrides: Partial<PaymentSession> = {},
+): PaymentSession {
+  return {
+    providerRef: 'cs_1',
+    mode: 'hosted',
+    url: 'https://pay.example/cs_1',
+    clientSecret: null,
+    expiresAt: EXPIRES_AT,
     ...overrides,
   };
 }
@@ -65,7 +85,7 @@ function createPrismaMock() {
         .mockResolvedValue(orderRow()),
       update: jest
         .fn<Promise<OrderRow>, [unknown]>()
-        .mockResolvedValue(orderRow({ paymentRef: 'fake_ref' })),
+        .mockResolvedValue(orderRow({ paymentRef: 'cs_1' })),
       updateMany: jest.fn<Promise<{ count: number }>, [unknown]>(),
       findFirst: jest.fn<Promise<OrderRow | null>, [unknown]>(),
       findUnique: jest
@@ -73,6 +93,11 @@ function createPrismaMock() {
         .mockResolvedValue(orderRow()),
       findMany: jest.fn<Promise<OrderRow[]>, [unknown]>().mockResolvedValue([]),
       count: jest.fn<Promise<number>, [unknown]>().mockResolvedValue(0),
+    },
+    orderItem: {
+      findMany: jest
+        .fn<Promise<{ productId: string; quantity: number }[]>, [unknown]>()
+        .mockResolvedValue([]),
     },
   };
 
@@ -116,8 +141,20 @@ function createStockMock() {
 function createPaymentsMock() {
   return {
     createPayment: jest
-      .fn<Promise<{ providerRef: string }>, [unknown]>()
-      .mockResolvedValue({ providerRef: 'fake_ref' }),
+      .fn<Promise<PaymentSession>, [unknown]>()
+      .mockResolvedValue(paymentSession()),
+    // No open session by default: the common case is an order that has never
+    // been paid for.
+    getPayment: jest
+      .fn<Promise<PaymentSession | null>, [string]>()
+      .mockResolvedValue(null),
+    expirePayment: jest
+      .fn<Promise<void>, [string]>()
+      .mockResolvedValue(undefined),
+    refund: jest
+      .fn<Promise<{ refundRef: string }>, [unknown]>()
+      .mockResolvedValue({ refundRef: 're_1' }),
+    parseEvent: jest.fn(),
   };
 }
 
@@ -151,6 +188,21 @@ function serviceWith({ prisma, products, stock, payments }: Mocks) {
   );
 }
 
+/** Silences the deliberate error/warn logging, and hands back the spies. */
+function muteLogger() {
+  return {
+    error: jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined),
+    warn: jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined),
+    log: jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined),
+  };
+}
+
 function userWith(permissions: Permission[] = []): AuthenticatedUser {
   return { id: 'user-1', role: 'customer', permissions: new Set(permissions) };
 }
@@ -175,6 +227,10 @@ function cartWith(items: { productId: string; quantity: number }[]) {
 }
 
 describe('OrdersService', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   describe('checkout', () => {
     function primeHappyPath(mocks: Mocks) {
       mocks.prisma.cart.findUnique.mockResolvedValue(
@@ -252,7 +308,7 @@ describe('OrdersService', () => {
       );
     });
 
-    it('registers the payment after the transaction and stores the reference', async () => {
+    it('opens a payment session after the transaction and stores it', async () => {
       const mocks = createMocks();
       primeHappyPath(mocks);
 
@@ -261,13 +317,70 @@ describe('OrdersService', () => {
       expect(mocks.payments.createPayment).toHaveBeenCalledWith({
         orderId: 'order-1',
         amountCents: 4500,
+        mode: undefined,
       });
       const [updateArgs] = mocks.prisma.order.update.mock.calls[0] as [
-        { where: { id: string }; data: { paymentRef: string } },
+        {
+          where: { id: string };
+          data: {
+            paymentRef: string;
+            paymentUrl: string | null;
+            paymentExpiresAt: Date;
+          };
+        },
       ];
       expect(updateArgs.where).toEqual({ id: 'order-1' });
-      expect(updateArgs.data.paymentRef).toBe('fake_ref');
-      expect(order.paymentRef).toBe('fake_ref');
+      expect(updateArgs.data.paymentRef).toBe('cs_1');
+      expect(updateArgs.data.paymentUrl).toBe('https://pay.example/cs_1');
+      expect(updateArgs.data.paymentExpiresAt).toEqual(EXPIRES_AT);
+      // The response carries the way to pay, which is not the same as the
+      // stored columns: a client secret is never persisted.
+      expect(order.payment).toEqual({
+        mode: 'hosted',
+        url: 'https://pay.example/cs_1',
+        clientSecret: null,
+        expiresAt: EXPIRES_AT,
+      });
+    });
+
+    it('passes the requested checkout mode to the provider', async () => {
+      const mocks = createMocks();
+      primeHappyPath(mocks);
+      mocks.payments.createPayment.mockResolvedValue(
+        paymentSession({
+          mode: 'embedded',
+          url: null,
+          clientSecret: 'cs_1_secret',
+        }),
+      );
+
+      const order = await serviceWith(mocks).checkout(
+        'user-1',
+        ADDRESS,
+        'embedded',
+      );
+
+      expect(mocks.payments.createPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: 'embedded' }),
+      );
+      expect(order.payment?.clientSecret).toBe('cs_1_secret');
+    });
+
+    it('still creates the order when the provider is down', async () => {
+      const mocks = createMocks();
+      const logger = muteLogger();
+      primeHappyPath(mocks);
+      mocks.payments.createPayment.mockRejectedValue(new Error('stripe down'));
+
+      const order = await serviceWith(mocks).checkout('user-1', ADDRESS);
+
+      // The order is real and the stock is committed; only the way to pay is
+      // missing, and POST /orders/:id/pay exists to supply it. Failing the
+      // checkout here would throw away a completed transaction.
+      expect(order.id).toBe('order-1');
+      expect(order.payment).toBeNull();
+      expect(mocks.prisma.order.update).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalled();
     });
 
     it('409s on an empty or missing cart without opening a transaction', async () => {
@@ -532,6 +645,239 @@ describe('OrdersService', () => {
       ];
       expect(args.where).toEqual({ id: 'order-1' });
     });
+
+    it('expires the payment session so the cancelled order stops being payable', async () => {
+      const mocks = createMocks();
+      primeCancellable(mocks);
+      mocks.prisma.order.findFirst.mockResolvedValue(
+        orderRow({ paymentRef: 'cs_1' }),
+      );
+
+      await serviceWith(mocks).cancel(userWith(), 'order-1');
+
+      // The stock just went back on the shelf and may be sold to someone
+      // else; leaving the old session payable is how you get money for goods
+      // that are gone.
+      expect(mocks.payments.expirePayment).toHaveBeenCalledWith('cs_1');
+    });
+
+    it('cancels anyway when the provider will not expire the session', async () => {
+      const mocks = createMocks();
+      const logger = muteLogger();
+      primeCancellable(mocks);
+      mocks.prisma.order.findFirst.mockResolvedValue(
+        orderRow({ paymentRef: 'cs_1' }),
+      );
+      mocks.payments.expirePayment.mockRejectedValue(new Error('stripe down'));
+
+      // Cancelling is the customer's action; it cannot be held hostage to a
+      // third party being reachable.
+      await expect(
+        serviceWith(mocks).cancel(userWith(), 'order-1'),
+      ).resolves.toBeDefined();
+      expect(logger.warn).toHaveBeenCalled();
+    });
+  });
+
+  describe('pay', () => {
+    function primeOrder(mocks: Mocks, overrides: Partial<OrderRow> = {}) {
+      mocks.prisma.order.findFirst.mockResolvedValue(orderRow(overrides));
+      mocks.prisma.order.findUnique.mockResolvedValue(orderRow(overrides));
+    }
+
+    it('issues a session for an order that has none', async () => {
+      const mocks = createMocks();
+      primeOrder(mocks);
+
+      const result = await serviceWith(mocks).pay(userWith(), 'order-1');
+
+      expect(mocks.payments.createPayment).toHaveBeenCalledWith({
+        orderId: 'order-1',
+        amountCents: 4500,
+        mode: undefined,
+      });
+      expect(result.payment.url).toBe('https://pay.example/cs_1');
+    });
+
+    it('hands back the open session rather than opening a second one', async () => {
+      const mocks = createMocks();
+      primeOrder(mocks, { paymentRef: 'cs_1' });
+      mocks.payments.getPayment.mockResolvedValue(paymentSession());
+
+      const result = await serviceWith(mocks).pay(userWith(), 'order-1');
+
+      // Two open sessions for one order are two ways to charge the same
+      // person — this reuse is the main defence against that.
+      expect(mocks.payments.getPayment).toHaveBeenCalledWith('cs_1');
+      expect(mocks.payments.createPayment).not.toHaveBeenCalled();
+      expect(mocks.prisma.order.update).not.toHaveBeenCalled();
+      expect(result.payment.url).toBe('https://pay.example/cs_1');
+    });
+
+    it('expires the old session when a different mode is asked for', async () => {
+      const mocks = createMocks();
+      primeOrder(mocks, { paymentRef: 'cs_1' });
+      mocks.payments.getPayment.mockResolvedValue(paymentSession());
+      mocks.payments.createPayment.mockResolvedValue(
+        paymentSession({
+          providerRef: 'cs_2',
+          mode: 'embedded',
+          url: null,
+          clientSecret: 'cs_2_secret',
+        }),
+      );
+
+      const result = await serviceWith(mocks).pay(
+        userWith(),
+        'order-1',
+        'embedded',
+      );
+
+      // Replacing without expiring would leave the hosted one payable too.
+      expect(mocks.payments.expirePayment).toHaveBeenCalledWith('cs_1');
+      expect(result.payment.clientSecret).toBe('cs_2_secret');
+    });
+
+    it('409s an order that is no longer CREATED', async () => {
+      const mocks = createMocks();
+      primeOrder(mocks, { status: OrderStatus.PAID });
+
+      await expect(
+        serviceWith(mocks).pay(userWith(), 'order-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(mocks.payments.createPayment).not.toHaveBeenCalled();
+    });
+
+    it("404s an invisible order and 403s a visible one that isn't the caller's", async () => {
+      const invisible = createMocks();
+      invisible.prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(
+        serviceWith(invisible).pay(userWith(), 'order-9'),
+      ).rejects.toThrow(NotFoundException);
+
+      const visible = createMocks();
+      visible.prisma.order.findFirst.mockResolvedValue(
+        orderRow({ userId: 'user-2' }),
+      );
+
+      await expect(
+        serviceWith(visible).pay(
+          userWith([PERMISSIONS.ORDERS_READ]),
+          'order-1',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('503s when the provider cannot be reached', async () => {
+      const mocks = createMocks();
+      const logger = muteLogger();
+      primeOrder(mocks);
+      mocks.payments.createPayment.mockRejectedValue(new Error('stripe down'));
+
+      // Unlike checkout, issuing the session is the entire point of the
+      // request — there is nothing worth answering 200 about.
+      await expect(
+        serviceWith(mocks).pay(userWith(), 'order-1'),
+      ).rejects.toThrow(ServiceUnavailableException);
+      expect(logger.error).toHaveBeenCalled();
+    });
+  });
+
+  describe('refund', () => {
+    function primePaid(mocks: Mocks, overrides: Partial<OrderRow> = {}) {
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({
+          status: OrderStatus.PAID,
+          paymentIntentRef: 'pi_1',
+          ...overrides,
+        }),
+      );
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      mocks.prisma.orderItem.findMany.mockResolvedValue([
+        { productId: 'p1', quantity: 2 },
+      ]);
+    }
+
+    it('refunds against the intent, marks REFUNDED and restocks', async () => {
+      const mocks = createMocks();
+      primePaid(mocks);
+
+      await serviceWith(mocks).refund('order-1');
+
+      expect(mocks.payments.refund).toHaveBeenCalledWith({
+        paymentIntentRef: 'pi_1',
+      });
+      const [args] = mocks.prisma.order.updateMany.mock.calls[0] as [
+        {
+          where: { id: string; status: OrderStatus };
+          data: { status: OrderStatus; refundRef: string; refundedAt: Date };
+        },
+      ];
+      // Conditional on PAID, so the route and the provider's own
+      // charge.refunded event cannot both restock.
+      expect(args.where).toEqual({ id: 'order-1', status: OrderStatus.PAID });
+      expect(args.data.status).toBe(OrderStatus.REFUNDED);
+      expect(args.data.refundRef).toBe('re_1');
+      expect(mocks.stock.restock).toHaveBeenCalledWith(
+        'p1',
+        2,
+        expect.anything(),
+      );
+    });
+
+    it.each([
+      OrderStatus.CREATED,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.REFUNDED,
+    ])('409s a %s order without calling the provider', async (status) => {
+      const mocks = createMocks();
+      primePaid(mocks, { status });
+
+      await expect(serviceWith(mocks).refund('order-1')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(mocks.payments.refund).not.toHaveBeenCalled();
+    });
+
+    it('409s an order that was marked paid by hand', async () => {
+      const mocks = createMocks();
+      primePaid(mocks, { paymentIntentRef: null });
+
+      // A bank transfer or a Pix outside the gateway leaves nothing for the
+      // provider to reverse; asking it to would be asking for money it never
+      // took.
+      await expect(serviceWith(mocks).refund('order-1')).rejects.toThrow(
+        /recorded as paid manually/,
+      );
+      expect(mocks.payments.refund).not.toHaveBeenCalled();
+    });
+
+    it('shouts when the order moved after the money went back', async () => {
+      const mocks = createMocks();
+      const logger = muteLogger();
+      primePaid(mocks);
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(serviceWith(mocks).refund('order-1')).rejects.toThrow(
+        ConflictException,
+      );
+      // The refund at the provider already happened, so this is a money
+      // problem, not a routine conflict.
+      expect(logger.error).toHaveBeenCalled();
+      expect(mocks.stock.restock).not.toHaveBeenCalled();
+    });
+
+    it('markRefunded answers false instead of throwing on a non-PAID order', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        serviceWith(mocks).markRefunded('order-1', 're_1'),
+      ).resolves.toBe(false);
+      expect(mocks.stock.restock).not.toHaveBeenCalled();
+    });
   });
 
   describe('transitions', () => {
@@ -558,6 +904,20 @@ describe('OrdersService', () => {
         expect(args.data[timestampField]).toBeInstanceOf(Date);
       },
     );
+
+    it('records the provider intent when the webhook supplies one', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+
+      await serviceWith(mocks).markPaid('order-1', 'pi_1');
+
+      const [args] = mocks.prisma.order.updateMany.mock.calls[0] as [
+        { data: { paymentIntentRef?: string } },
+      ];
+      // Refunds are issued against the intent, so this is the one chance to
+      // learn it — the manual mark-paid route has no intent to record.
+      expect(args.data.paymentIntentRef).toBe('pi_1');
+    });
 
     it('404s a transition on an order that does not exist', async () => {
       const mocks = createMocks();
