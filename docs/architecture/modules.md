@@ -1,10 +1,10 @@
 # Mapa de módulos internos
 
 > Status: quase todo real. `auth`, `catalog`, `orders`, `payments`
-> (interface + fake, sem Stripe ainda), `prisma` e `mail` existem;
-> `shipping` continua desenho-alvo — a seta `orders → shipping` é
-> intenção, não código. Se um módulo passar a depender de outro de um
-> jeito não previsto aqui, o diagrama está desatualizado, não o código.
+> (Stripe de verdade), `prisma` e `mail` existem; `shipping` continua
+> desenho-alvo — a seta `orders → shipping` é intenção, não código. Se um
+> módulo passar a depender de outro de um jeito não previsto aqui, o
+> diagrama está desatualizado, não o código.
 
 Setas sólidas = depende de (chamada direta via interface/serviço
 injetado). Setas tracejadas = usa utilitário compartilhado, sem
@@ -69,12 +69,27 @@ flowchart LR
 - `payments` e `shipping` expõem só a interface (`PaymentProvider`,
   `ShippingProvider`); o adapter concreto (Stripe, transportadora X)
   fica escondido atrás dela — trocar de provedor não deve tocar em
-  `orders`. `payments` já existe nessa forma mínima: o token
-  `PAYMENT_PROVIDER` com um `FakePaymentProvider` atrás (mesmo padrão
-  do `mail`), e a transição `CREATED → PAID` passa por
-  `OrdersService.markPaid` — o seam que o webhook do Stripe vai chamar.
-  Não é `@Global` de propósito: só `orders` cobra dinheiro, e importar
-  o módulo é o que mantém essa dependência visível no grafo.
+  `orders`. `payments` já existe nessa forma completa: o token
+  `PAYMENT_PROVIDER` com `StripePaymentProvider` atrás (ou
+  `FakePaymentProvider`, quando não há chave configurada e o ambiente não
+  é produção), mesmo padrão do `mail`. Não é `@Global` de propósito: só
+  `orders` cobra dinheiro, e importar o módulo é o que mantém essa
+  dependência visível no grafo.
+- **O webhook de pagamento é rota do `orders`**, não do `payments`, mesmo
+  servindo `/payments/webhook`. Reagir a um pagamento é mudar um
+  **pedido**: hospedar o controller em `payments` faria `payments`
+  depender de `orders`, que é ciclo e o contrário da regra acima. O que
+  mantém isso honesto é o contrato — `PaymentProvider.parseEvent` verifica
+  a assinatura e devolve um evento do **domínio**
+  (`payment.succeeded`, `payment.refunded`…), então nenhum tipo do Stripe
+  atravessa a fronteira. Consequência boa de lado: `payments` continua sem
+  tocar em banco; a tabela `payment_events` (dedupe de reentrega) é do
+  `orders`.
+- `payments` depende do SDK do Stripe atrás de um token próprio
+  (`STRIPE_CLIENT`) em vez de construí-lo dentro do adapter. É o que
+  permite testar o adapter em unidade e, no e2e, substituir **só** as duas
+  chamadas que vão à rede — a verificação de assinatura continua sendo a
+  do SDK. Ver [`docs/specs/payments.md`](../specs/payments.md).
 
 Quando isso for validado com lint (boundaries entre módulos), essa
 seção diz o que a regra deve proibir.
