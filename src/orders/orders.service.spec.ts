@@ -11,7 +11,10 @@ import { type Permission, PERMISSIONS } from '../auth/authz/permissions';
 import type { ProductsService } from '../catalog/products.service';
 import type { StockService } from '../catalog/stock.service';
 import { OrderStatus, ProductStatus } from '../generated/prisma/enums';
-import type { PaymentSession } from '../payments/payment-provider';
+import type {
+  PaymentSession,
+  SessionLookup,
+} from '../payments/payment-provider';
 import type { PrismaService } from '../prisma/prisma.service';
 import { OrdersService, type ShippingAddress } from './orders.service';
 
@@ -86,7 +89,11 @@ function createPrismaMock() {
       update: jest
         .fn<Promise<OrderRow>, [unknown]>()
         .mockResolvedValue(orderRow({ paymentRef: 'cs_1' })),
-      updateMany: jest.fn<Promise<{ count: number }>, [unknown]>(),
+      // Claiming writes succeed by default; the tests that care about losing a
+      // race set count: 0 explicitly.
+      updateMany: jest
+        .fn<Promise<{ count: number }>, [unknown]>()
+        .mockResolvedValue({ count: 1 }),
       findFirst: jest.fn<Promise<OrderRow | null>, [unknown]>(),
       findUnique: jest
         .fn<Promise<OrderRow | null>, [unknown]>()
@@ -143,11 +150,11 @@ function createPaymentsMock() {
     createPayment: jest
       .fn<Promise<PaymentSession>, [unknown]>()
       .mockResolvedValue(paymentSession()),
-    // No open session by default: the common case is an order that has never
-    // been paid for.
+    // Nothing at the provider by default: the common case is an order that has
+    // never been paid for.
     getPayment: jest
-      .fn<Promise<PaymentSession | null>, [string]>()
-      .mockResolvedValue(null),
+      .fn<Promise<SessionLookup>, [string]>()
+      .mockResolvedValue({ state: 'gone' }),
     expirePayment: jest
       .fn<Promise<void>, [string]>()
       .mockResolvedValue(undefined),
@@ -319,9 +326,9 @@ describe('OrdersService', () => {
         amountCents: 4500,
         mode: undefined,
       });
-      const [updateArgs] = mocks.prisma.order.update.mock.calls[0] as [
+      const [updateArgs] = mocks.prisma.order.updateMany.mock.calls[0] as [
         {
-          where: { id: string };
+          where: { id: string; status: OrderStatus };
           data: {
             paymentRef: string;
             paymentUrl: string | null;
@@ -329,7 +336,12 @@ describe('OrdersService', () => {
           };
         },
       ];
-      expect(updateArgs.where).toEqual({ id: 'order-1' });
+      // Conditional on CREATED: a session must never be stapled to an order
+      // that was cancelled while the provider call was in flight.
+      expect(updateArgs.where).toEqual({
+        id: 'order-1',
+        status: OrderStatus.CREATED,
+      });
       expect(updateArgs.data.paymentRef).toBe('cs_1');
       expect(updateArgs.data.paymentUrl).toBe('https://pay.example/cs_1');
       expect(updateArgs.data.paymentExpiresAt).toEqual(EXPIRES_AT);
@@ -379,7 +391,7 @@ describe('OrdersService', () => {
       // checkout here would throw away a completed transaction.
       expect(order.id).toBe('order-1');
       expect(order.payment).toBeNull();
-      expect(mocks.prisma.order.update).not.toHaveBeenCalled();
+      expect(mocks.prisma.order.updateMany).not.toHaveBeenCalled();
       expect(logger.error).toHaveBeenCalled();
     });
 
@@ -683,6 +695,12 @@ describe('OrdersService', () => {
     function primeOrder(mocks: Mocks, overrides: Partial<OrderRow> = {}) {
       mocks.prisma.order.findFirst.mockResolvedValue(orderRow(overrides));
       mocks.prisma.order.findUnique.mockResolvedValue(orderRow(overrides));
+      // The claiming write that attaches a new session succeeds by default.
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    }
+
+    function openSession(session = paymentSession()): SessionLookup {
+      return { state: 'open', session };
     }
 
     it('issues a session for an order that has none', async () => {
@@ -702,7 +720,7 @@ describe('OrdersService', () => {
     it('hands back the open session rather than opening a second one', async () => {
       const mocks = createMocks();
       primeOrder(mocks, { paymentRef: 'cs_1' });
-      mocks.payments.getPayment.mockResolvedValue(paymentSession());
+      mocks.payments.getPayment.mockResolvedValue(openSession());
 
       const result = await serviceWith(mocks).pay(userWith(), 'order-1');
 
@@ -710,14 +728,28 @@ describe('OrdersService', () => {
       // person — this reuse is the main defence against that.
       expect(mocks.payments.getPayment).toHaveBeenCalledWith('cs_1');
       expect(mocks.payments.createPayment).not.toHaveBeenCalled();
-      expect(mocks.prisma.order.update).not.toHaveBeenCalled();
       expect(result.payment.url).toBe('https://pay.example/cs_1');
+    });
+
+    it('409s instead of re-issuing when the session was already paid', async () => {
+      const mocks = createMocks();
+      // The order is still CREATED only because the confirmation webhook has
+      // not landed. Before this guard, /pay read "not open" as "make another
+      // one" and handed the buyer a second way to pay the same order — a real
+      // double charge, reachable with nothing worse than webhook latency.
+      primeOrder(mocks, { paymentRef: 'cs_1' });
+      mocks.payments.getPayment.mockResolvedValue({ state: 'completed' });
+
+      await expect(
+        serviceWith(mocks).pay(userWith(), 'order-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(mocks.payments.createPayment).not.toHaveBeenCalled();
     });
 
     it('expires the old session when a different mode is asked for', async () => {
       const mocks = createMocks();
       primeOrder(mocks, { paymentRef: 'cs_1' });
-      mocks.payments.getPayment.mockResolvedValue(paymentSession());
+      mocks.payments.getPayment.mockResolvedValue(openSession());
       mocks.payments.createPayment.mockResolvedValue(
         paymentSession({
           providerRef: 'cs_2',
@@ -736,6 +768,45 @@ describe('OrdersService', () => {
       // Replacing without expiring would leave the hosted one payable too.
       expect(mocks.payments.expirePayment).toHaveBeenCalledWith('cs_1');
       expect(result.payment.clientSecret).toBe('cs_2_secret');
+    });
+
+    it('aborts the mode switch when the old session will not expire', async () => {
+      const mocks = createMocks();
+      muteLogger();
+      primeOrder(mocks, { paymentRef: 'cs_1' });
+      mocks.payments.getPayment.mockResolvedValue(openSession());
+      mocks.payments.expirePayment.mockRejectedValue(new Error('stripe down'));
+
+      // Best-effort is right in cancel(), where nothing is created afterwards.
+      // Here the swallowed failure would be the precondition for the very thing
+      // expiring exists to prevent: two payable sessions on one order.
+      await expect(
+        serviceWith(mocks).pay(userWith(), 'order-1', 'embedded'),
+      ).rejects.toThrow(ServiceUnavailableException);
+      expect(mocks.payments.createPayment).not.toHaveBeenCalled();
+    });
+
+    it('refuses to attach a session to an order that moved meanwhile', async () => {
+      const mocks = createMocks();
+      muteLogger();
+      primeOrder(mocks);
+      // Cancelled (or paid) while createPayment was in flight: the claiming
+      // write matches nothing.
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        serviceWith(mocks).pay(userWith(), 'order-1'),
+      ).rejects.toThrow(ConflictException);
+
+      const [args] = mocks.prisma.order.updateMany.mock.calls[0] as [
+        { where: { id: string; status: OrderStatus } },
+      ];
+      expect(args.where).toEqual({
+        id: 'order-1',
+        status: OrderStatus.CREATED,
+      });
+      // The orphan is closed rather than left open against a settled order.
+      expect(mocks.payments.expirePayment).toHaveBeenCalledWith('cs_1');
     });
 
     it('409s an order that is no longer CREATED', async () => {

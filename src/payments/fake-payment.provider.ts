@@ -9,6 +9,7 @@ import type {
   PaymentEvent,
   PaymentProvider,
   PaymentSession,
+  SessionLookup,
 } from './payment-provider';
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -75,14 +76,20 @@ export class FakePaymentProvider implements PaymentProvider {
     return Promise.resolve(session);
   }
 
-  getPayment(providerRef: string): Promise<PaymentSession | null> {
+  /**
+   * Nothing ever pays a fake session, so it only knows two of the three states:
+   * a session it issued is open, anything else is gone. `completed` is
+   * unreachable here — which is precisely why the double-charge window it
+   * guards against is only exercisable against the Stripe adapter.
+   */
+  getPayment(providerRef: string): Promise<SessionLookup> {
     const session = this.sessions.get(providerRef);
 
     if (!session || session.expiresAt.getTime() <= Date.now()) {
-      return Promise.resolve(null);
+      return Promise.resolve({ state: 'gone' });
     }
 
-    return Promise.resolve(session);
+    return Promise.resolve({ state: 'open', session });
   }
 
   expirePayment(providerRef: string): Promise<void> {

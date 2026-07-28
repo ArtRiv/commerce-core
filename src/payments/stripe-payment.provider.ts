@@ -9,6 +9,7 @@ import type {
   PaymentEvent,
   PaymentProvider,
   PaymentSession,
+  SessionLookup,
   WebhookHeaders,
 } from './payment-provider';
 import { STRIPE_CLIENT } from './stripe-client';
@@ -141,30 +142,38 @@ export class StripePaymentProvider implements PaymentProvider {
     return this.toSession(session, checkoutMode);
   }
 
-  async getPayment(providerRef: string): Promise<PaymentSession | null> {
+  async getPayment(providerRef: string): Promise<SessionLookup> {
     let session: Stripe.Checkout.Session;
 
     try {
       session = await this.stripe.checkout.sessions.retrieve(providerRef);
     } catch (error: unknown) {
-      // Only "there is no such session" becomes null. A network failure must
-      // propagate: reporting "no open session" during an outage would have the
-      // caller cheerfully create a second way to pay the same order.
+      // Only "there is no such session" is a real answer. A network failure
+      // must propagate: reporting "nothing here" during an outage would have
+      // the caller cheerfully create a second way to pay the same order.
       if (isMissingResource(error)) {
-        return null;
+        return { state: 'gone' };
       }
 
       throw error;
     }
 
-    if (session.status !== 'open') {
-      return null;
+    if (session.status === 'open') {
+      return {
+        state: 'open',
+        session: this.toSession(
+          session,
+          session.ui_mode === 'embedded_page' ? 'embedded' : 'hosted',
+        ),
+      };
     }
 
-    return this.toSession(
-      session,
-      session.ui_mode === 'embedded_page' ? 'embedded' : 'hosted',
-    );
+    // 'complete' means the buyer went through checkout — paid outright, or an
+    // asynchronous method still settling. Both must block a replacement
+    // session; only a genuinely dead one ('expired') may be replaced.
+    return session.status === 'complete'
+      ? { state: 'completed' }
+      : { state: 'gone' };
   }
 
   async expirePayment(providerRef: string): Promise<void> {
@@ -243,6 +252,16 @@ export class StripePaymentProvider implements PaymentProvider {
         const paymentIntentRef = refOf(charge.payment_intent);
 
         if (!paymentIntentRef) {
+          return { id: event.id, type: 'ignored' };
+        }
+
+        // Stripe fires this for PARTIAL refunds too, where `refunded` stays
+        // false. Treating one as a full reversal would flip the order to
+        // REFUNDED and put every line item back on the shelf while most of the
+        // money is still held — inventory invented, order unshippable. Issuing
+        // partial refunds is out of scope (docs/specs/payments.md), but the
+        // event arrives whether we support the feature or not.
+        if (!charge.refunded) {
           return { id: event.id, type: 'ignored' };
         }
 

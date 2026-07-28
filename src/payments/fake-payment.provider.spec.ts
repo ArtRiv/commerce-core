@@ -58,25 +58,28 @@ describe('FakePaymentProvider', () => {
   });
 
   describe('getPayment', () => {
-    it('returns a session it issued, so /pay can reuse instead of duplicating', async () => {
+    it('reports a session it issued as open, so /pay reuses instead of duplicating', async () => {
       const provider = providerWith();
       const created = await provider.createPayment(createInput());
 
-      await expect(provider.getPayment(created.providerRef)).resolves.toEqual(
-        created,
-      );
+      await expect(provider.getPayment(created.providerRef)).resolves.toEqual({
+        state: 'open',
+        session: created,
+      });
     });
 
-    it('returns null for an unknown or expired reference', async () => {
+    it('reports an unknown or expired reference as gone', async () => {
       const provider = providerWith();
       const created = await provider.createPayment(createInput());
 
-      await expect(provider.getPayment('fake_cs_nope')).resolves.toBeNull();
+      await expect(provider.getPayment('fake_cs_nope')).resolves.toEqual({
+        state: 'gone',
+      });
 
       await provider.expirePayment(created.providerRef);
-      await expect(
-        provider.getPayment(created.providerRef),
-      ).resolves.toBeNull();
+      await expect(provider.getPayment(created.providerRef)).resolves.toEqual({
+        state: 'gone',
+      });
     });
   });
 

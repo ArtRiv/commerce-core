@@ -1,4 +1,9 @@
-import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 
 import { OrderStatus } from '../generated/prisma/enums';
 import type { PaymentEvent } from '../payments/payment-provider';
@@ -30,8 +35,17 @@ function createPrismaMock() {
         .fn<Promise<{ id: string } | null>, [unknown]>()
         .mockResolvedValue(null),
       findUnique: jest
-        .fn<Promise<{ status: OrderStatus } | null>, [unknown]>()
-        .mockResolvedValue({ status: OrderStatus.CREATED }),
+        .fn<
+          Promise<{
+            status: OrderStatus;
+            paymentIntentRef: string | null;
+          } | null>,
+          [unknown]
+        >()
+        .mockResolvedValue({
+          status: OrderStatus.CREATED,
+          paymentIntentRef: null,
+        }),
     },
   };
 }
@@ -177,11 +191,13 @@ describe('PaymentEventsService', () => {
     expect(mocks.orders.markRefunded).toHaveBeenCalledWith('order-7', 're_1');
   });
 
-  it('treats an already-paid order as settled, not as a failure', async () => {
+  it('treats a redelivery of the SAME payment as settled, not as a failure', async () => {
     const mocks = createMocks();
     mocks.orders.markPaid.mockRejectedValue(new ConflictException('already'));
     mocks.prisma.order.findUnique.mockResolvedValue({
       status: OrderStatus.PAID,
+      // Same intent already on the order: nothing moved twice.
+      paymentIntentRef: 'pi_1',
     });
 
     // Answering anything but 200 here would have the provider redeliver for
@@ -192,11 +208,33 @@ describe('PaymentEventsService', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it('shouts, with the second intent, when an order was charged twice', async () => {
+    const mocks = createMocks();
+    mocks.orders.markPaid.mockRejectedValue(new ConflictException('already'));
+    mocks.prisma.order.findUnique.mockResolvedValue({
+      status: OrderStatus.PAID,
+      // A DIFFERENT intent — the buyer really was charged a second time.
+      paymentIntentRef: 'pi_first',
+    });
+
+    await expect(serviceWith(mocks).handle(SUCCEEDED)).resolves.toBe(
+      'processed',
+    );
+
+    // The order column holds the first intent and payment_events stores no
+    // payload, so if this line does not name the second one, nothing does —
+    // and the extra charge cannot be refunded without hunting the dashboard.
+    const message = String((logger.error.mock.calls[0] as [unknown])[0]);
+    expect(message).toContain('pi_1');
+    expect(message).toContain('pi_first');
+  });
+
   it('shouts when a payment lands on an order that cannot accept it', async () => {
     const mocks = createMocks();
     mocks.orders.markPaid.mockRejectedValue(new ConflictException('cancelled'));
     mocks.prisma.order.findUnique.mockResolvedValue({
       status: OrderStatus.CANCELLED,
+      paymentIntentRef: null,
     });
 
     await expect(serviceWith(mocks).handle(SUCCEEDED)).resolves.toBe(
@@ -205,6 +243,22 @@ describe('PaymentEventsService', () => {
     // Money was taken for an order whose stock went back on the shelf. There
     // is no automatic fix; the log is what gets a human to the dashboard.
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('refuses a refund whose payment is not registered yet, so it is redelivered', async () => {
+    const mocks = createMocks();
+    // No order carries this intent — almost always because the refund overtook
+    // its own payment.succeeded, since the intent is recorded BY that event.
+    mocks.prisma.order.findFirst.mockResolvedValue(null);
+
+    await expect(serviceWith(mocks).handle(REFUNDED)).rejects.toThrow(
+      ServiceUnavailableException,
+    );
+
+    // Never stamped: swallowing this would 200 the provider, stop redelivery,
+    // and leave the order PAID forever after the money already went back.
+    expect(mocks.prisma.paymentEvent.update).not.toHaveBeenCalled();
+    expect(mocks.orders.markRefunded).not.toHaveBeenCalled();
   });
 
   it('records a payment for an unknown order without failing', async () => {

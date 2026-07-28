@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 
 import { OrderStatus } from '../generated/prisma/enums';
@@ -164,7 +165,7 @@ export class PaymentEventsService {
       // A state conflict must NOT reach the provider as an error: it would
       // redeliver this event for days over something already settled.
       if (error instanceof ConflictException) {
-        await this.reportUnpayableOrder(orderId);
+        await this.reportUnpayableOrder(orderId, paymentIntentRef);
 
         return;
       }
@@ -179,9 +180,19 @@ export class PaymentEventsService {
     refundRef: string | null,
   ): Promise<void> {
     if (!orderId) {
-      this.logger.warn('A refund arrived for a payment no order claims');
+      // A refund names only the intent, and the intent is recorded by the
+      // SUCCESS event — so an unresolvable refund usually means the two arrived
+      // out of order, not that the payment is foreign. Swallowing it would
+      // stamp the event processed and leave the order PAID forever after the
+      // money went back. Throwing keeps it unprocessed and makes the provider
+      // redeliver, by which time the payment will have registered.
+      this.logger.warn(
+        'A refund arrived for a payment no order claims yet — refusing it so the provider redelivers',
+      );
 
-      return;
+      throw new ServiceUnavailableException(
+        'Refund refers to a payment that is not registered yet',
+      );
     }
 
     const applied = await this.orders.markRefunded(orderId, refundRef);
@@ -193,18 +204,33 @@ export class PaymentEventsService {
     }
   }
 
-  private async reportUnpayableOrder(orderId: string): Promise<void> {
+  private async reportUnpayableOrder(
+    orderId: string,
+    paymentIntentRef: string,
+  ): Promise<void> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { status: true },
+      select: { status: true, paymentIntentRef: true },
     });
 
     if (order?.status === OrderStatus.PAID) {
-      // Benign: a second successful session for an order already paid, or a
-      // redelivery that slipped past the event table. Either way, nothing to
-      // do here — but if money moved twice, this line is the trail.
-      this.logger.log(
-        `Order ${orderId} was already PAID when another payment event arrived`,
+      // Same intent means a redelivery the event table did not absorb —
+      // routine, nothing moved. A DIFFERENT intent means this order was
+      // genuinely charged twice, and the only way anyone can reverse the
+      // second charge is if its id appears here: payment_events stores no
+      // payload, and the order column already holds the first one.
+      if (order.paymentIntentRef === paymentIntentRef) {
+        this.logger.log(
+          `Order ${orderId} was already PAID when the same payment event arrived again`,
+        );
+
+        return;
+      }
+
+      this.logger.error(
+        `Order ${orderId} was already PAID by ${order.paymentIntentRef ?? 'an unrecorded payment'} ` +
+          `when a SECOND payment ${paymentIntentRef} arrived — the buyer was charged twice and ` +
+          `${paymentIntentRef} needs a manual refund`,
       );
 
       return;

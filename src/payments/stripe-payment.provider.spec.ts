@@ -186,34 +186,50 @@ describe('StripePaymentProvider', () => {
   });
 
   describe('getPayment', () => {
-    it('returns the session while it is still open', async () => {
+    it('reports an open session, with the session itself', async () => {
       const stripe = createStripeMock();
       stripe.checkout.sessions.retrieve.mockResolvedValue(stripeSession());
 
-      const session = await providerWith(stripe).getPayment('cs_test_123');
+      const lookup = await providerWith(stripe).getPayment('cs_test_123');
 
       expect(stripe.checkout.sessions.retrieve).toHaveBeenCalledWith(
         'cs_test_123',
       );
-      expect(session?.providerRef).toBe('cs_test_123');
-      expect(session?.mode).toBe('hosted');
+      expect(lookup).toEqual({
+        state: 'open',
+        session: expect.objectContaining({
+          providerRef: 'cs_test_123',
+          mode: 'hosted',
+        }) as unknown,
+      });
     });
 
-    it.each(['complete', 'expired'])(
-      'returns null for a %s session, so a new one gets issued',
-      async (status) => {
-        const stripe = createStripeMock();
-        stripe.checkout.sessions.retrieve.mockResolvedValue(
-          stripeSession({ status }),
-        );
+    it('reports a completed session as completed, NOT as gone', async () => {
+      const stripe = createStripeMock();
+      stripe.checkout.sessions.retrieve.mockResolvedValue(
+        stripeSession({ status: 'complete' }),
+      );
 
-        await expect(
-          providerWith(stripe).getPayment('cs_test_123'),
-        ).resolves.toBeNull();
-      },
-    );
+      // The distinction that prevents a double charge: the buyer already went
+      // through checkout, so a replacement session must be refused rather than
+      // issued while the confirmation webhook is still in flight.
+      await expect(
+        providerWith(stripe).getPayment('cs_test_123'),
+      ).resolves.toEqual({ state: 'completed' });
+    });
 
-    it('returns null when the reference no longer exists at the provider', async () => {
+    it('reports an expired session as gone, so a new one gets issued', async () => {
+      const stripe = createStripeMock();
+      stripe.checkout.sessions.retrieve.mockResolvedValue(
+        stripeSession({ status: 'expired' }),
+      );
+
+      await expect(
+        providerWith(stripe).getPayment('cs_test_123'),
+      ).resolves.toEqual({ state: 'gone' });
+    });
+
+    it('reports a reference that no longer exists as gone', async () => {
       const stripe = createStripeMock();
       stripe.checkout.sessions.retrieve.mockRejectedValue(
         Object.assign(new Error('No such checkout session'), {
@@ -224,7 +240,7 @@ describe('StripePaymentProvider', () => {
 
       await expect(
         providerWith(stripe).getPayment('cs_test_gone'),
-      ).resolves.toBeNull();
+      ).resolves.toEqual({ state: 'gone' });
     });
 
     it('propagates a transport failure instead of reporting no session', async () => {
@@ -408,6 +424,9 @@ describe('StripePaymentProvider', () => {
           object: {
             id: 'ch_1',
             payment_intent: 'pi_1',
+            // Fully refunded — the discriminator that separates this from a
+            // partial refund.
+            refunded: true,
             metadata: { orderId: 'order-1' },
             refunds: { data: [{ id: 're_1' }] },
           },
@@ -424,13 +443,47 @@ describe('StripePaymentProvider', () => {
       });
     });
 
+    it('IGNORES a partial refund instead of treating it as a full one', () => {
+      const stripe = createStripeMock();
+      // Stripe fires charge.refunded for partial refunds too; `refunded` stays
+      // false until the charge is fully reversed. Acting on this would flip a
+      // R$500 order to REFUNDED over a R$20 goodwill credit and put every line
+      // item back on the shelf — inventory invented out of nothing.
+      primeEvent(stripe, {
+        id: 'evt_partial',
+        type: 'charge.refunded',
+        data: {
+          object: {
+            id: 'ch_1',
+            payment_intent: 'pi_1',
+            refunded: false,
+            amount: 50000,
+            amount_refunded: 2000,
+            metadata: { orderId: 'order-1' },
+            refunds: { data: [{ id: 're_partial' }] },
+          },
+        },
+      });
+
+      expect(providerWith(stripe).parseEvent(body, signed('sig'))).toEqual({
+        id: 'evt_partial',
+        providerType: 'charge.refunded',
+        type: 'ignored',
+      });
+    });
+
     it('still reports a refund whose refund id was not expanded', () => {
       const stripe = createStripeMock();
       primeEvent(stripe, {
         id: 'evt_5',
         type: 'charge.refunded',
         data: {
-          object: { id: 'ch_1', payment_intent: 'pi_1', metadata: {} },
+          object: {
+            id: 'ch_1',
+            payment_intent: 'pi_1',
+            refunded: true,
+            metadata: {},
+          },
         },
       });
 

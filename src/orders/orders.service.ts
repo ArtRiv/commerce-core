@@ -261,8 +261,17 @@ export class OrdersService {
     try {
       payment = await this.issueSession(order, mode);
     } catch (error: unknown) {
-      // Unlike checkout, there is nothing else this request was for — failing
-      // loudly beats answering 201 with no way to pay.
+      // A refusal from issueSession is a deliberate answer about this order's
+      // state — already paid at the provider, or no longer awaiting payment —
+      // and has to reach the caller intact. Repainting it as a 503 would invite
+      // exactly the retry it exists to prevent.
+      if (error instanceof ConflictException) {
+        throw error;
+      }
+
+      // Anything else is the provider being unreachable. Unlike checkout, there
+      // is nothing else this request was for — failing loudly beats answering
+      // 200 with no way to pay.
       this.logger.error(
         `Could not issue a payment session for order ${id}: ${describe(error)}`,
       );
@@ -488,22 +497,41 @@ export class OrdersService {
    * Hands back the order's open session, or issues a new one.
    *
    * Reuse is the whole point: two open sessions for one order are two ways to
-   * charge the same buyer. When the caller insists on a different mode, the
-   * old session is expired before a replacement is made, for the same reason.
+   * charge the same buyer. Everything below exists to keep that from happening,
+   * because each escape route ends in someone being charged twice:
+   *
+   * - a COMPLETED session refuses rather than replacing — the buyer already
+   *   went through checkout and only the confirmation is late;
+   * - a mode switch expires the old session and lets a failure to do so
+   *   ABORT, since proceeding is exactly what would leave two of them payable;
+   * - the final write is conditional on the order still being CREATED, so a
+   *   session cannot be stapled to an order that was cancelled while the
+   *   provider call was in flight.
    */
   private async issueSession(
     order: PayableOrder,
     mode?: CheckoutMode,
   ): Promise<PaymentSessionView> {
     if (order.paymentRef) {
-      const open = await this.payments.getPayment(order.paymentRef);
+      const existing = await this.payments.getPayment(order.paymentRef);
 
-      if (open && (mode === undefined || open.mode === mode)) {
-        return toView(open);
+      if (existing.state === 'completed') {
+        // The order is still CREATED only because the webhook has not landed.
+        // Issuing another session here is the double-charge this whole method
+        // is written to prevent.
+        throw new ConflictException(
+          'This order has already been paid at the provider; waiting for confirmation',
+        );
       }
 
-      if (open) {
-        await this.expireQuietly(order.paymentRef);
+      if (existing.state === 'open') {
+        if (mode === undefined || existing.session.mode === mode) {
+          return toView(existing.session);
+        }
+
+        // Deliberately NOT best-effort: if the old session survives, the
+        // replacement below becomes a second way to pay the same order.
+        await this.payments.expirePayment(order.paymentRef);
       }
     }
 
@@ -513,14 +541,25 @@ export class OrdersService {
       mode,
     });
 
-    await this.prisma.order.update({
-      where: { id: order.id },
+    const { count } = await this.prisma.order.updateMany({
+      where: { id: order.id, status: OrderStatus.CREATED },
       data: {
         paymentRef: session.providerRef,
         paymentUrl: session.url,
         paymentExpiresAt: session.expiresAt,
       },
     });
+
+    if (count === 0) {
+      // The order moved while we were at the provider — cancelled, or paid by
+      // another route. The session we just made is unreferenced and payable,
+      // so close it rather than leaving it open against a settled order.
+      await this.expireQuietly(session.providerRef);
+
+      throw new ConflictException(
+        'Order is no longer awaiting payment; no session was issued',
+      );
+    }
 
     return toView(session);
   }

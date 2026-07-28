@@ -20,6 +20,12 @@ import { StripePaymentProvider } from './stripe-payment.provider';
  * becoming a disaster, because a deploy that quietly stops charging money is a
  * worse failure than one that refuses to boot.
  */
+/**
+ * Environments where falling back to the fake is a convenience rather than a
+ * hole. Anything else — including NODE_ENV being unset — is treated as real.
+ */
+const FAKE_PAYMENTS_ALLOWED = new Set(['development', 'test']);
+
 export function resolvePaymentProvider(
   config: ConfigService,
   stripe: Stripe | null,
@@ -28,10 +34,22 @@ export function resolvePaymentProvider(
     return new StripePaymentProvider(stripe, config);
   }
 
-  if (config.get<string>('NODE_ENV') === 'production') {
+  // Allow-list, not a deny-list, and that asymmetry is the whole point.
+  // FakePaymentProvider does no signature verification — its webhook takes the
+  // request body AS the event — so anyone who can reach /payments/webhook can
+  // mark any order paid. Refusing only when NODE_ENV === 'production' made that
+  // one unset variable away on a staging box or a platform that does not set it,
+  // and the failure was silent: a warning line, then a wide-open route in front
+  // of a real database. Defaulting to "this is real" costs a dev one explicit
+  // NODE_ENV and removes the fail-open entirely.
+  const environment = config.get<string>('NODE_ENV')?.trim().toLowerCase();
+
+  if (!environment || !FAKE_PAYMENTS_ALLOWED.has(environment)) {
     throw new Error(
-      'STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required in production — ' +
-        'refusing to start a store that cannot charge anyone.',
+      'STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required unless NODE_ENV is ' +
+        `'development' or 'test' (NODE_ENV is ${environment ? `'${environment}'` : 'unset'}) — ` +
+        'refusing to start a store that cannot charge anyone and whose webhook accepts ' +
+        'unsigned events.',
     );
   }
 

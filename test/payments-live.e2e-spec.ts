@@ -20,7 +20,7 @@ import { StripePaymentProvider } from '../src/payments/stripe-payment.provider';
  * the file sidesteps that contamination. With no real key present it skips
  * entirely, so CI and a fresh clone stay green and offline.
  *
- * Run it deliberately: `npm run test:e2e -- payments-live`. It creates test-mode
+ * Run it deliberately: `pnpm test:e2e -- payments-live`. It creates test-mode
  * Checkout Sessions in the configured account and moves no money.
  */
 function loadEnvFile(): Record<string, string> {

@@ -84,16 +84,37 @@ export interface CreatePaymentInput {
   mode?: CheckoutMode;
 }
 
+/**
+ * What a stored session reference turned out to be at the provider.
+ *
+ * The three states must stay distinct, and `completed` is why. Collapsing it
+ * into "no open session" reads as "safe to issue another one" — but the buyer
+ * has already been through checkout, and the confirmation webhook may simply
+ * not have landed yet. Issuing a replacement there hands the same person a
+ * second way to pay the same order, which is a double charge with our name on
+ * it. See docs/specs/payments.md.
+ */
+export type SessionLookup =
+  /** Still payable — hand this back instead of opening a second one. */
+  | { state: 'open'; session: PaymentSession }
+  /**
+   * The buyer completed checkout. Payment may still be settling (boleto, Pix),
+   * so this is "committed", not necessarily "money received" — either way, no
+   * new session.
+   */
+  | { state: 'completed' }
+  /** Expired, cancelled, or never existed. Safe to issue a new one. */
+  | { state: 'gone' };
+
 export interface PaymentProvider {
   createPayment(input: CreatePaymentInput): Promise<PaymentSession>;
 
   /**
-   * The session behind a stored reference, or null if it can no longer be paid
-   * (expired, completed, or never existed). Null is the signal to issue a new
-   * one; reusing an open session is what stops a single order growing two ways
-   * to pay it, which is the same thing as two ways to charge the buyer.
+   * What became of a stored session reference. Reusing an open session is what
+   * stops a single order growing two ways to pay it, which is the same thing as
+   * two ways to charge the buyer.
    */
-  getPayment(providerRef: string): Promise<PaymentSession | null>;
+  getPayment(providerRef: string): Promise<SessionLookup>;
 
   /** Closes a session for an order that is no longer payable (cancelled). */
   expirePayment(providerRef: string): Promise<void>;

@@ -51,18 +51,24 @@ describe('resolvePaymentProvider', () => {
     ).toBeInstanceOf(StripePaymentProvider);
   });
 
-  it('falls back to the fake outside production, loudly', () => {
-    const provider = resolvePaymentProvider(configWith(), null);
+  it.each(['development', 'test'])(
+    'falls back to the fake in %s, loudly',
+    (environment) => {
+      const provider = resolvePaymentProvider(
+        configWith({ NODE_ENV: environment }),
+        null,
+      );
 
-    expect(provider).toBeInstanceOf(FakePaymentProvider);
-    expect(warn).toHaveBeenCalled();
-  });
+      expect(provider).toBeInstanceOf(FakePaymentProvider);
+      expect(warn).toHaveBeenCalled();
+    },
+  );
 
   it('refuses the fake when only one of the two variables is set', () => {
     // A secret key with no webhook secret charges people and can never confirm
-    // it did — the fake is the safer of two bad options outside production.
+    // it did — the fake is the safer of two bad options in development.
     const provider = resolvePaymentProvider(
-      configWith({ STRIPE_SECRET_KEY: 'sk_test_x' }),
+      configWith({ NODE_ENV: 'development', STRIPE_SECRET_KEY: 'sk_test_x' }),
       stripe,
     );
 
@@ -72,7 +78,31 @@ describe('resolvePaymentProvider', () => {
   it('refuses to boot in production without Stripe', () => {
     expect(() =>
       resolvePaymentProvider(configWith({ NODE_ENV: 'production' }), null),
-    ).toThrow(/required in production/);
+    ).toThrow(/STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required/);
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['staging', 'staging'],
+    ['Production (wrong case)', 'Production'],
+    ['prod', 'prod'],
+  ])(
+    'refuses to boot with NODE_ENV %s rather than silently faking payments',
+    (_label, environment) => {
+      // The fake's webhook does NO signature verification — the body IS the
+      // event — so anyone who can reach /payments/webhook could mark orders
+      // paid. An allow-list means an unset or misspelled NODE_ENV fails closed
+      // instead of opening that route on a real deployment.
+      expect(() =>
+        resolvePaymentProvider(configWith({ NODE_ENV: environment }), null),
+      ).toThrow(/required unless NODE_ENV is/);
+    },
+  );
+
+  it('still accepts an explicitly cased or padded development value', () => {
+    expect(
+      resolvePaymentProvider(configWith({ NODE_ENV: ' Development ' }), null),
+    ).toBeInstanceOf(FakePaymentProvider);
   });
 
   it('still binds Stripe in production when it is configured', () => {

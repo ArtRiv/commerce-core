@@ -350,6 +350,35 @@ describe('Payments (e2e)', () => {
       );
     });
 
+    it('409s /pay when the session was paid but the webhook has not landed', async () => {
+      await fillCart();
+      const order = await checkout();
+
+      // The buyer pays at the provider; the confirmation is delayed — Stripe
+      // backoff, a 429 during a spike, a transient 5xx. The order is therefore
+      // STILL `CREATED`, so the status guard alone lets this through.
+      stripe.markSessionPaid(order.paymentRef ?? '');
+
+      // Seeing no confirmation, the buyer clicks "pay" again. Before the
+      // completed/gone distinction this issued a SECOND payable session and
+      // charged them twice, with only the first intent ever recorded.
+      await http()
+        .post(`/orders/${order.id}/pay`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({})
+        .expect(409);
+
+      // Still exactly one session on the order, and none created since.
+      expect((await orderOf(order.id)).paymentRef).toBe(order.paymentRef);
+      expect((await orderOf(order.id)).status).toBe(OrderStatus.CREATED);
+
+      // ...and the delayed webhook still settles it correctly afterwards.
+      await deliver(
+        sessionEvent('checkout.session.completed', order.paymentRef ?? ''),
+      ).expect(200);
+      expect((await orderOf(order.id)).status).toBe(OrderStatus.PAID);
+    });
+
     it('409s /pay on an order that is already paid', async () => {
       await fillCart();
       const order = await payOrder(await checkout());
@@ -677,13 +706,65 @@ describe('Payments (e2e)', () => {
       expect(stripe.refundsIssued).toEqual([]);
     });
 
-    it('records a dashboard refund even when no order claims the intent', async () => {
-      // Same real event, an intent no order here stored: recorded and 200'd,
-      // never an error the provider would retry.
-      await deliver(realChargeRefunded('pi_belongs_to_no_order')).expect(200);
+    it('ignores a PARTIAL dashboard refund instead of reversing the order', async () => {
+      const { order, productId } = await paidOrder();
 
-      expect(await prisma.paymentEvent.count()).toBe(1);
+      // Support issues a small goodwill credit on a much larger order. Stripe
+      // fires charge.refunded for this too, with `refunded: false`. Treating it
+      // as a full reversal would mark the order REFUNDED, put every line item
+      // back on the shelf — inventory invented from nothing — and leave it
+      // unshippable while most of the money is still held.
+      const partial = realChargeRefunded(order.paymentIntentRef ?? '');
+      const charge = (partial.data as { object: Record<string, unknown> })
+        .object;
+      charge.refunded = false;
+      charge.amount = 50000;
+      charge.amount_refunded = 2000;
+
+      await deliver(partial).expect(200);
+
+      const after = await orderOf(order.id);
+      expect(after.status).toBe(OrderStatus.PAID);
+      expect(after.refundedAt).toBeNull();
+      // Stock stays consumed: nothing came back to the shelf.
+      expect(await stockOf(productId)).toBe(8);
+      // Recorded, so the trail still shows it arrived.
+      expect(await prisma.paymentEvent.count()).toBe(2);
+    });
+
+    it('refuses a refund whose payment is not registered yet, so it is redelivered', async () => {
+      // A refund carries only the intent, and the intent is recorded by the
+      // SUCCESS event — so "no order claims it" nearly always means the two
+      // events arrived out of order, not that the payment is foreign.
+      // Acknowledging it would stamp the event processed, stop redelivery, and
+      // leave the order PAID forever after the money had already gone back.
+      await deliver(realChargeRefunded('pi_not_registered_yet')).expect(503);
+
+      const event = await prisma.paymentEvent.findFirst();
+      expect(event).not.toBeNull();
+      // Seen but unprocessed: the redelivery will find work to do.
+      expect(event?.processedAt).toBeNull();
       expect(stripe.refundsIssued).toEqual([]);
+    });
+
+    it('settles a refund that overtook its payment once the payment registers', async () => {
+      const { order, productId } = await paidOrder();
+      const intent = order.paymentIntentRef ?? '';
+
+      // Same event id both times: the first attempt is refused and left
+      // unprocessed, so the redelivery must be allowed through rather than
+      // dismissed as a duplicate.
+      const refundEvent = realChargeRefunded('pi_not_registered_yet');
+      await deliver(refundEvent).expect(503);
+
+      (
+        refundEvent.data as { object: Record<string, unknown> }
+      ).object.payment_intent = intent;
+      await deliver(refundEvent).expect(200);
+
+      const refunded = await orderOf(order.id);
+      expect(refunded.status).toBe(OrderStatus.REFUNDED);
+      expect(await stockOf(productId)).toBe(10);
     });
   });
 
