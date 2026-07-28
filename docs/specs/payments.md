@@ -19,12 +19,22 @@ assinatura. Qual header carrega a assinatura é assunto do provedor
 
 ### Buracos de cobertura conhecidos
 
-- As duas chamadas HTTP ao Stripe (criar sessão, reembolsar) não são
-  exercidas por teste automatizado — mesma postura do `ResendMailService`.
-  Tudo até a borda do SDK é testado, inclusive a verificação de assinatura
-  de verdade. A checagem manual antes do deploy é
+- A **criação de sessão** é verificada contra o Stripe de verdade, nos dois
+  modos, por `test/payments-live.e2e-spec.ts` — que pula sozinho sem chave
+  real. O que continua sem teste automatizado é o **reembolso**
+  (`refunds.create`), mesma postura do `ResendMailService`. Tudo até a
+  borda do SDK é testado, inclusive a verificação de assinatura de verdade.
+  A checagem manual antes do deploy é
   `stripe listen --forward-to localhost:3000/payments/webhook` com uma
   compra de teste ponta a ponta.
+- O `FakePaymentProvider` só tem cobertura **unitária**: desde que o
+  `createTestApp` força chaves de teste, toda a suíte e2e roda contra o
+  `StripePaymentProvider` (com a rede dublada). O caminho "clone novo, sem
+  Stripe, checkout funciona" é garantido pelo contrato compartilhado, não
+  por um e2e próprio.
+- `getPayment` do fake nunca devolve `completed` — nada paga uma sessão
+  falsa. A janela de cobrança dupla que esse estado fecha só é exercitável
+  contra o adapter do Stripe (é o que o e2e faz, via `OfflineStripe`).
 - O critério de RLS foi verificado pelo security advisor do Supabase após
   o deploy da migration (`payment_events` aparece como "RLS enabled, no
   policies", o estado desejado), não por uma sonda HTTP com a anon key —
@@ -129,6 +139,24 @@ rota manual que já existe e o webhook do Stripe).
   vez de criar outra. Duas sessões abertas pro mesmo pedido são duas
   chances de pagar duas vezes; essa é a mitigação, e é ela — não uma
   idempotency key — que carrega o peso.
+
+  Exceção única: se o cliente pedir um `paymentMode` diferente do da
+  sessão aberta, ela é **expirada** antes de a substituta nascer — e, ao
+  contrário do cancelamento, essa expiração **não** é best-effort. Se ela
+  falhar, `/pay` aborta: seguir em frente é exatamente o que deixaria as
+  duas pagáveis.
+- **Sessão já paga não vira sessão nova.** `getPayment` distingue três
+  estados (`open` / `completed` / `gone`), e não dois. Um pedido cujo
+  comprador já pagou continua `CREATED` até o webhook chegar — se `/pay`
+  lesse "não está aberta" como "pode criar outra", entregaria a essa mesma
+  pessoa uma segunda forma de pagar o mesmo pedido. É cobrança dupla
+  alcançável com nada pior que latência de webhook, então `completed`
+  responde `409` e espera a confirmação.
+- **A gravação da sessão é condicional em `CREATED`.** A chamada ao
+  provedor acontece fora de transação, e o pedido pode ser cancelado (ou
+  pago) nesse meio-tempo; gravar sem condição grudaria uma sessão pagável
+  num pedido que já devolveu o estoque à prateleira. Se a condição não
+  casar, a sessão recém-criada é expirada e a requisição responde `409`.
 - **A assinatura do webhook é a fronteira de segurança do módulo
   inteiro.** Nada além dela distingue um evento do Stripe de um `POST`
   de qualquer pessoa da internet dizendo "o pedido X foi pago". Mesmo
@@ -213,6 +241,28 @@ rota manual que já existe e o webhook do Stripe).
   adivinhar num HMAC), é anti-flood. E aqui um `429` não perde evento —
   o Stripe reentrega com backoff. Apertar demais é que seria errado, num
   pico de vendas.
+- **A trilha guarda o vocabulário do provedor.** O evento que cruza a
+  fronteira é do domínio (`payment.succeeded`…), mas `payment_events.type`
+  grava o nome **original** do Stripe (`checkout.session.completed`,
+  `customer.created`). Por isso `PaymentEvent` carrega `providerType` ao
+  lado do `type` de domínio: um serve pra despachar, o outro pra auditar.
+  Sem isso, metade das linhas de uma conta real vira um `"ignored"` anônimo
+  e a tabela não distingue um `customer.created` de um `charge.updated`.
+- **Reembolso que chega antes do próprio pagamento é recusado, não
+  engolido.** Um `charge.refunded` só conhece o intent, e quem registra o
+  intent é o evento de **sucesso** — então "nenhum pedido reivindica esse
+  intent" quase sempre significa que os dois chegaram fora de ordem, não
+  que o pagamento é de outro sistema. Responder `200` carimbaria o evento
+  como processado, encerraria a reentrega e deixaria o pedido `PAID` pra
+  sempre depois de o dinheiro já ter voltado. Responder erro mantém o
+  evento não-processado e faz o Stripe reentregar, quando o pagamento já
+  terá registrado.
+- **Cobrança dupla é logada como `error`, com o segundo intent.** Se um
+  evento de sucesso chega pra pedido já `PAID` com o **mesmo** intent, é
+  reentrega e não moveu nada (`log`). Com um intent **diferente**, a pessoa
+  foi cobrada duas vezes: a coluna do pedido guarda o primeiro e
+  `payment_events` não guarda payload, então se essa linha não nomear o
+  segundo, nada nomeia — e o estorno vira caça ao dashboard.
 - **`payment_events` não guarda o payload do Stripe** — só id, tipo,
   pedido e carimbos. O payload traz e-mail e nome do comprador, e a
   tabela não precisa deles pra fazer o que faz.
@@ -221,7 +271,11 @@ rota manual que já existe e o webhook do Stripe).
 - **Erro segue a convenção:** corpo malformado ou assinatura inválida →
   `400`; pedido inexistente (ou de outro dono) → `404`; sem permissão →
   `403`; requisição válida em conflito com o estado (reembolsar pedido
-  não pago, pagar pedido já pago) → `409`.
+  não pago, pagar pedido já pago) → `409`. Uma adição do módulo: provedor
+  indisponível em `/pay` → `503`. Ao contrário do checkout, emitir a
+  sessão **é** a requisição inteira; responder `200` sem forma de pagar
+  seria pior. No webhook, `503` é deliberado também — é o que faz o Stripe
+  reentregar em vez de desistir.
 
 ## Modelo de dados (esboço Prisma)
 
@@ -246,8 +300,10 @@ model Order {
   /// precisa é o clientSecret, que não é persistido.
   paymentUrl String? @map("payment_url")
 
-  /// Quando a sessão atual expira. Deixa /pay decidir entre reusar e
-  /// criar sem perguntar ao Stripe.
+  /// Quando a sessão atual expira. Hoje é só leitura — pra humanos e pra
+  /// consulta: /pay confirma o estado com o provedor a cada chamada,
+  /// porque "aberta segundo o nosso banco" e "aberta de fato" divergem
+  /// (e a diferença entre paga e expirada é o que evita cobrança dupla).
   paymentExpiresAt DateTime? @map("payment_expires_at")
 
   /// PaymentIntent (pi_...), conhecido só quando o pagamento acontece.
@@ -328,10 +384,11 @@ Resposta do checkout e de `/pay`: o pedido de sempre, mais
 `payment: PaymentSessionView | null` — `null` quando o provedor falhou e
 o pedido ficou sem sessão.
 
-### Contrato com payments (v2)
+### Contrato com payments (v3)
 
 ```ts
-export type CheckoutMode = 'hosted' | 'embedded';
+export const CHECKOUT_MODES = ['hosted', 'embedded'] as const;
+export type CheckoutMode = (typeof CHECKOUT_MODES)[number];
 
 /** O saco de headers como chegou, sem interpretar. */
 export type WebhookHeaders = Record<string, string | string[] | undefined>;
@@ -339,30 +396,54 @@ export type WebhookHeaders = Record<string, string | string[] | undefined>;
 export interface PaymentSession {
   providerRef: string; // cs_...
   mode: CheckoutMode;
-  url?: string;
-  clientSecret?: string;
+  url: string | null; // sempre null no modo embedded
+  clientSecret: string | null; // sempre null no modo hosted; nunca persistido
   expiresAt: Date;
 }
 
+/**
+ * Três estados, não dois. `completed` é o que impede a cobrança dupla:
+ * colapsá-lo em "não tem sessão aberta" se lê como "pode criar outra" — mas o
+ * comprador já passou pelo checkout e só a confirmação está atrasada.
+ */
+export type SessionLookup =
+  | { state: 'open'; session: PaymentSession }
+  | { state: 'completed' }
+  | { state: 'gone' };
+
 /** Vocabulário do domínio, não do Stripe. */
-export type PaymentEvent =
-  | { id: string; type: 'payment.succeeded'; orderId?: string; paymentIntentRef: string }
-  | { id: string; type: 'payment.failed'; orderId?: string }
-  | { id: string; type: 'payment.expired'; orderId?: string }
-  | { id: string; type: 'payment.refunded'; paymentIntentRef: string; refundRef: string }
+export type DomainOutcome =
+  | { id: string; type: 'payment.succeeded'; orderId: string | null; paymentIntentRef: string }
+  | { id: string; type: 'payment.failed'; orderId: string | null }
+  | { id: string; type: 'payment.expired'; orderId: string | null }
+  | {
+      id: string;
+      type: 'payment.refunded';
+      orderId: string | null;
+      paymentIntentRef: string;
+      refundRef: string | null;
+    }
   | { id: string; type: 'ignored' };
 
+/**
+ * `type` é o desfecho de domínio (despacho); `providerType` é o nome original
+ * do evento no provedor (auditoria). Ver a regra da trilha, abaixo.
+ */
+export type PaymentEvent = { providerType: string } & DomainOutcome;
+
+export interface CreatePaymentInput {
+  orderId: string;
+  amountCents: number;
+  mode?: CheckoutMode;
+}
+
 export interface PaymentProvider {
-  createPayment(input: {
-    orderId: string;
-    amountCents: number;
-    mode?: CheckoutMode;
-  }): Promise<PaymentSession>;
+  createPayment(input: CreatePaymentInput): Promise<PaymentSession>;
 
-  /** A sessão, se ainda estiver aberta; null se expirou/fechou. */
-  getPayment(providerRef: string): Promise<PaymentSession | null>;
+  /** O que a referência guardada virou no provedor. */
+  getPayment(providerRef: string): Promise<SessionLookup>;
 
-  /** Best-effort: fecha a sessão de um pedido cancelado. */
+  /** Fecha a sessão de um pedido que não é mais pagável. */
   expirePayment(providerRef: string): Promise<void>;
 
   refund(input: { paymentIntentRef: string }): Promise<{ refundRef: string }>;
@@ -378,19 +459,31 @@ export interface PaymentProvider {
 
 Mapeamento Stripe → domínio, dentro do adapter:
 
-| Evento do Stripe                          | Vira                            |
-| ----------------------------------------- | ------------------------------- |
-| `checkout.session.completed` (`paid`)     | `payment.succeeded`             |
-| `checkout.session.completed` (`unpaid`)   | `ignored` (método assíncrono)   |
-| `checkout.session.async_payment_succeeded`| `payment.succeeded`             |
-| `checkout.session.async_payment_failed`   | `payment.failed`                |
-| `checkout.session.expired`                | `payment.expired`               |
-| `charge.refunded`                         | `payment.refunded`              |
-| qualquer outro                            | `ignored`                       |
+| Evento do Stripe                                                         | Vira                          |
+| ------------------------------------------------------------------------ | ----------------------------- |
+| `checkout.session.completed` / `async_payment_succeeded`, `paid` **e** com `payment_intent` | `payment.succeeded`           |
+| qualquer um dos dois sem `paid` ou sem `payment_intent`                   | `ignored` (método assíncrono) |
+| `checkout.session.async_payment_failed`                                   | `payment.failed`              |
+| `checkout.session.expired`                                                | `payment.expired`             |
+| `charge.refunded` com `refunded: true`                                    | `payment.refunded`            |
+| `charge.refunded` **parcial** (`refunded: false`) ou sem `payment_intent` | `ignored`                     |
+| qualquer outro                                                            | `ignored`                     |
 
-`orderId` sai de `client_reference_id` (e de `metadata.orderId`, que
-também vai em `payment_intent_data` pra que eventos de intent/charge o
-carreguem). Eventos de charge são resolvidos por `paymentIntentRef`.
+Os dois eventos de sucesso caem no mesmo `case`: o filtro de `payment_status`
+vale pros dois, porque boleto e Pix completam a sessão antes de pagar.
+
+**Reembolso parcial é `ignored` de propósito.** O Stripe dispara
+`charge.refunded` também quando só parte do valor volta, e nesse caso
+`refunded` continua `false`. Tratar isso como reversão total marcaria o
+pedido inteiro como `REFUNDED` e devolveria **todos** os itens ao estoque
+— inventário inventado — com a maior parte do dinheiro ainda retida.
+Emitir reembolso parcial está fora de escopo, mas o evento chega
+independente de a gente suportar a feature.
+
+`orderId` sai de `client_reference_id` nos eventos de **sessão**; nos de
+**charge** sai de `metadata.orderId` (que vai em `payment_intent_data` pra
+ser herdado) e, quando ele não vem — que é o caso real, ver os buracos de
+cobertura —, o pedido é achado pelo `paymentIntentRef`.
 
 O `CheckoutMode` do domínio (`hosted` | `embedded`) **não** é o valor que
 vai pro Stripe: na versão de API atual do SDK os valores são
@@ -436,6 +529,15 @@ Checkout e sessão:
       criada no provedor.
 - [x] Dado um pedido `PAID`, `CANCELLED` ou `REFUNDED`, quando chamo
       `/pay`, então recebo `409`.
+- [x] Dado um pedido cuja sessão **já foi paga** mas cujo webhook ainda
+      não chegou (pedido segue `CREATED`), quando chamo `/pay`, então
+      recebo `409` e **nenhuma** sessão nova é criada — e o webhook
+      atrasado ainda conclui o pedido normalmente depois.
+- [x] Dado que o pedido saiu de `CREATED` enquanto o provedor respondia,
+      quando a sessão ia ser gravada, então nada é gravado, a sessão órfã
+      é expirada e recebo `409`.
+- [x] Dado o provedor indisponível, quando chamo `/pay`, então recebo
+      `503` e o pedido continua `CREATED`.
 - [x] Dado o pedido de outro cliente, quando chamo `/pay`, então recebo
       `404` sem `orders.read`, e `200` com `orders.update_status`.
 
@@ -474,6 +576,13 @@ Reembolso:
 - [x] Dado um `charge.refunded` originado no dashboard do Stripe, quando
       chega no webhook, então o pedido `PAID` vira `REFUNDED` pelo mesmo
       caminho; reentregue, responde `200` sem devolver estoque de novo.
+- [x] Dado um `charge.refunded` **parcial** (`refunded: false`), quando
+      chega no webhook, então o pedido continua `PAID`, o estoque não
+      volta, e o evento é registrado mesmo assim.
+- [x] Dado um `charge.refunded` cujo intent ainda não está registrado em
+      nenhum pedido, quando chega, então recebo `503` e o evento fica
+      **não-processado** — e quando o pagamento registra, a reentrega do
+      mesmo evento conclui o reembolso.
 
 Cancelamento:
 
@@ -483,11 +592,17 @@ Cancelamento:
 
 Configuração e infra:
 
-- [x] Dado nenhum `STRIPE_SECRET_KEY` e `NODE_ENV` diferente de
-      `production`, quando o app sobe, então ele sobe com o fake e loga
-      aviso, e o checkout continua funcionando ponta a ponta.
+- [x] Dado nenhum `STRIPE_SECRET_KEY` e `NODE_ENV` igual a `development`
+      ou `test`, quando o app sobe, então ele sobe com o fake e loga
+      aviso (o `FakePaymentProvider` satisfaz o mesmo contrato — cobertura
+      unitária, ver buracos conhecidos).
 - [x] Dado `NODE_ENV=production` sem as variáveis do Stripe, quando o app
-      tenta subir, então ele falha no boot.
+      tenta subir, então ele falha no boot (verificado também rodando o
+      build de verdade: sai com código 1).
+- [x] Dado `NODE_ENV` **não definido**, `staging`, `prod` ou com caixa
+      diferente, e sem as variáveis do Stripe, quando o app tenta subir,
+      então ele **também** falha — a lista é de permissão, não de
+      proibição, porque o fake aceita webhook sem assinatura.
 - [x] Dada a tabela `payment_events`, quando consultada com a anon key do
       Supabase, então nada é retornado (RLS deny-all na própria
       migration).
@@ -518,9 +633,23 @@ então dá pra testar de verdade, sem conta no Stripe e sem rede.
   o helper oficial pra exatamente isso. Resultado: a verificação de
   assinatura real, o corpo cru real, o `@Public()` real e a dedupe real
   ficam cobertos.
-- **Buraco que continua**: as chamadas HTTP ao Stripe (criar sessão,
-  reembolsar) não são exercidas por teste automatizado — mesma postura
-  honesta do Resend. A verificação manual antes do deploy é o
+- **Suíte live (opt-in)**: `test/payments-live.e2e-spec.ts` cria Checkout
+  Sessions **de verdade** na conta configurada, nos dois modos. É o único
+  teste que prova que o Stripe **aceita** os parâmetros que montamos —
+  nenhum dublê pode falsificar isso, e um campo errado só apareceria como
+  um `400` dele (ou, pior, como `payment: null` em produção). Ela lê a
+  chave do **arquivo** `.env`, não de `process.env`, justamente porque o
+  `createTestApp` força `sk_test_offline`; sem chave real, `describe.skip`
+  — clone novo e CI seguem verdes e offline. Rodar com
+  `pnpm test:e2e -- payments-live`.
+- **Fixture real**: `test/fixtures/charge-refunded.json` é um
+  `charge.refunded` capturado com `stripe trigger` e congelado. Serve de
+  contraprova às fixtures escritas à mão: nessa versão de API o evento
+  **não** traz `refunds` expandido nem `metadata` no charge — é por isso
+  que `refundRef` volta `null` e o pedido é achado pelo intent.
+- **Buraco que continua**: a chamada de **reembolso** (`refunds.create`)
+  não é exercida contra o Stripe real — mesma postura honesta do Resend.
+  A verificação manual antes do deploy é o
   `stripe listen --forward-to localhost:3000/payments/webhook` com uma
   compra de teste ponta a ponta.
 
@@ -554,13 +683,53 @@ então dá pra testar de verdade, sem conta no Stripe e sem rede.
 - **`mark-paid` manual num pedido que também tem sessão aberta**: o
   pedido vira `PAID` e a sessão continua aberta até expirar. Pagável.
   Mesma família do "pagou depois de cancelar" e mesma saída; expirar a
-  sessão no `mark-paid` também é uma linha, e entra se incomodar.
+  sessão no `mark-paid` também é uma linha, e entra se incomodar. (O
+  `cancel` faz isso; o `mark-paid` não — a assimetria é consciente, mas
+  é a mesma janela.)
+- **Sessão órfã**: se a gravação no banco falhar depois de o provedor ter
+  criado a sessão, ela existe lá, pagável, e nós não guardamos a
+  referência pra expirar. O comprador não chega nela pela API, mas ela
+  vaza (e conta pro limite de sessões do Stripe).
 - **Ambiente trocado** (evento de test mode chegando no endpoint de
   produção): a assinatura não confere, porque o segredo é por endpoint →
   `400`. Nada especial a fazer.
 
 ## Decisões adiadas
 
+Os quatro primeiros itens saíram de uma revisão feita depois da entrega
+(2026-07-28) e estão registrados aqui, e não em código, porque cada um
+depende de uma decisão que não é só técnica.
+
+- **Conferir valor e moeda no `payment.succeeded`.** Hoje `markPaid`
+  confia no `client_reference_id` e não compara `amount_total` com
+  `totalCents`. Não é explorável do jeito que está — o `unit_amount` é
+  fixado no servidor, `adjustable_quantity` e cupons estão desligados, e
+  test/live têm segredos de webhook distintos — mas é a checagem que
+  mantém isso verdadeiro se qualquer uma dessas coisas mudar, ou se
+  alguém criar um Payment Link com o `client_reference_id` de um pedido
+  existente. Custa carregar `amountTotal`/`currency` no evento de domínio.
+- **`trust proxy` / chave de rate limit.** O throttler chaveia pelo IP do
+  socket e o app nunca declara `trust proxy`, então atrás de um load
+  balancer **todo mundo divide um balde só** — dá pra queimar os 300/min
+  do webhook (atrasando entregas reais, que voltam por backoff) ou os
+  10/min do `/pay` da base inteira. É anterior a este módulo (vale pro
+  auth também) e a correção depende da topologia de deploy, que ainda não
+  existe.
+- **Serializar `/pay` concorrente.** Duas chamadas simultâneas num pedido
+  sem `paymentRef` leem `null` as duas e criam duas sessões — a gravação
+  condicional em `CREATED` não separa esse caso, porque as duas casam. O
+  conserto é um `SELECT … FOR UPDATE` (ou um claim condicional) segurando
+  a linha durante a chamada externa. Requer duplo-clique ou retry de
+  cliente, e o dano é o mesmo da cobrança dupla.
+- **A reentrega não preenche o `order_id` da linha de auditoria.** O
+  `claim` só insere; um evento visto quando o pedido ainda não era
+  resolvível (o caso do reembolso fora de ordem, acima) fica com
+  `order_id NULL` pra sempre, mesmo depois de reprocessar com sucesso. O
+  evento **é** aplicado — só a trilha fica menos navegável.
+- **Reembolso concorrente.** Dois `/refund` simultâneos chegam os dois ao
+  provedor; o Stripe recusa o segundo com `charge_already_refunded`, então
+  o dinheiro não volta duas vezes — mas quem garante é ele, não a gente, e
+  a recusa sobe como `500` em vez do `409` que a convenção promete.
 - **Tabela `payments`** (uma linha por tentativa, com `status` próprio) —
   o que tornaria pagamento duplicado um dado em vez de uma linha de log.
   Entra se o volume mostrar que acontece.

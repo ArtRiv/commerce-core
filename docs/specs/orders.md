@@ -276,7 +276,9 @@ Pedidos:
 | GET    | `/orders`                 | Lista paginada: próprios; tudo com `orders.read` (filtros `status`, `userId`) | autenticado |
 | GET    | `/orders/:id`             | Detalhe: próprio; qualquer um com `orders.read`  | autenticado                      |
 | POST   | `/orders/:id/cancel`      | `CREATED → CANCELLED`, devolve estoque           | dono (só próprio) ou `orders.cancel` |
-| POST   | `/orders/:id/mark-paid`   | `CREATED → PAID` (seam do webhook futuro)        | `orders.update_status`           |
+| POST   | `/orders/:id/pay`         | (Re)emite a sessão de pagamento — desenho em [`payments.md`](payments.md) | dono, ou `orders.update_status` |
+| POST   | `/orders/:id/mark-paid`   | `CREATED → PAID` (seam do webhook e do registro manual) | `orders.update_status`     |
+| POST   | `/orders/:id/refund`      | `PAID → REFUNDED` — desenho em [`payments.md`](payments.md) | `orders.refund`         |
 | POST   | `/orders/:id/ship`        | `PAID → SHIPPED`                                 | `orders.update_status`           |
 | POST   | `/orders/:id/deliver`     | `SHIPPED → DELIVERED`                            | `orders.update_status`           |
 

@@ -40,9 +40,11 @@ model Order {
   /// deliberately never persisted (see docs/specs/payments.md).
   paymentUrl String? @map("payment_url")
 
-  /// When the current session stops being payable. Lets /orders/:id/pay decide
-  /// between reusing the open session and creating a new one without asking
-  /// the provider — reuse is what stops one order growing two ways to pay it.
+  /// When the current session stops being payable. Read-only today — for
+  /// humans and for queries: /orders/:id/pay asks the provider on every call
+  /// instead, because "open according to our database" and "open in fact"
+  /// diverge, and telling PAID apart from EXPIRED is what stops one order
+  /// growing two ways to pay it.
   paymentExpiresAt DateTime? @map("payment_expires_at")
 
   /// The PaymentIntent (pi_...), known only once payment actually happens.
