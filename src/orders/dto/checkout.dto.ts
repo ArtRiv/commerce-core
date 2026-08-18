@@ -1,12 +1,18 @@
 import { Type } from 'class-transformer';
 import {
   IsDefined,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+
+import {
+  CHECKOUT_MODES,
+  type CheckoutMode,
+} from '../../payments/payment-provider';
 
 /**
  * Free-form address lines on purpose: v1 ships to Brazil but validates shape,
@@ -45,4 +51,14 @@ export class CheckoutDto {
   @ValidateNested()
   @Type(() => ShippingAddressDto)
   shippingAddress: ShippingAddressDto;
+
+  /**
+   * Which checkout UI the storefront wants. Optional: the deployment picks a
+   * default (STRIPE_CHECKOUT_MODE), and a request may override it — so one
+   * instance can serve a web storefront rendering its own checkout page and a
+   * mobile app opening the provider's hosted one.
+   */
+  @IsOptional()
+  @IsIn(CHECKOUT_MODES)
+  paymentMode?: CheckoutMode;
 }

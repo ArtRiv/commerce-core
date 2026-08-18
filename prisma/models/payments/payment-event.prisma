@@ -1,0 +1,31 @@
+/// Every webhook event that passed signature verification.
+///
+/// The primary key is the PROVIDER's event id (evt_... on Stripe), and that is
+/// the whole trick: Stripe redelivers on any non-2xx for up to ~3 days, so the
+/// unique violation on insert is what makes a redelivery a no-op instead of a
+/// second state change.
+///
+/// receivedAt and processedAt are separate on purpose. The row is inserted
+/// before dispatch — that is what serialises two simultaneous deliveries — and
+/// only stamped processed once dispatch succeeds. A crash mid-dispatch
+/// therefore leaves a seen-but-unprocessed row, which the next redelivery
+/// reprocesses. Collapsing the two into one column would mark the event handled
+/// the moment it arrived, and Stripe would never send it again: a silently lost
+/// payment. See docs/specs/payments.md.
+///
+/// No FK to orders, deliberately: an event may name an order that does not
+/// exist here (an object created in the dashboard, a crossed environment), and
+/// the record is worth keeping anyway. The provider's payload is NOT stored —
+/// it carries the buyer's name and email, and nothing here needs them.
+model PaymentEvent {
+  id   String @id
+  type String
+
+  orderId String? @map("order_id")
+
+  receivedAt  DateTime  @default(now()) @map("received_at")
+  processedAt DateTime? @map("processed_at")
+
+  @@index([orderId])
+  @@map("payment_events")
+}

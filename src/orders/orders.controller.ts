@@ -6,7 +6,9 @@ import {
   Param,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { PERMISSIONS } from '../auth/authz/permissions';
@@ -14,7 +16,9 @@ import { RequirePermissions } from '../auth/authz/require-permissions.decorator'
 import { CurrentUser } from '../auth/current-user.decorator';
 import { CheckoutDto } from './dto/checkout.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
+import { PayOrderDto } from './dto/pay-order.dto';
 import { OrdersService } from './orders.service';
+import { RATE_LIMITS } from './rate-limits';
 
 /**
  * Lifecycle transitions are explicit verbs, not a PATCH of a status field:
@@ -27,10 +31,32 @@ import { OrdersService } from './orders.service';
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
-  /** Checkout: converts the caller's cart into an order. */
+  /**
+   * Checkout: converts the caller's cart into an order and answers with the
+   * way to pay it. A provider outage does not fail this — the order is real,
+   * `payment` comes back null, and /pay below issues the session later.
+   */
   @Post()
   checkout(@CurrentUser() user: AuthenticatedUser, @Body() dto: CheckoutDto) {
-    return this.orders.checkout(user.id, dto.shippingAddress);
+    return this.orders.checkout(user.id, dto.shippingAddress, dto.paymentMode);
+  }
+
+  /**
+   * (Re)issues the payment session of a CREATED order: the recovery path for a
+   * checkout the provider could not complete, a closed tab, or an expired
+   * session. Hands back the open session when there is one, rather than
+   * creating a second way to charge the same buyer.
+   */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.ISSUE_PAYMENT })
+  @HttpCode(200)
+  @Post(':id/pay')
+  pay(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: PayOrderDto,
+  ) {
+    return this.orders.pay(user, id, dto.paymentMode);
   }
 
   @Get()
@@ -63,6 +89,18 @@ export class OrdersController {
   @Post(':id/mark-paid')
   markPaid(@Param('id') id: string) {
     return this.orders.markPaid(id);
+  }
+
+  /**
+   * `PAID → REFUNDED`: money back, stock back. Separate from cancel on
+   * purpose — an abandoned unpaid order and a reversed sale are different
+   * events — and gated by orders.refund, which only `admin` holds.
+   */
+  @RequirePermissions(PERMISSIONS.ORDERS_REFUND)
+  @HttpCode(200)
+  @Post(':id/refund')
+  refund(@Param('id') id: string) {
+    return this.orders.refund(id);
   }
 
   @RequirePermissions(PERMISSIONS.ORDERS_UPDATE_STATUS)

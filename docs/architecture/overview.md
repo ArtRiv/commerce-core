@@ -1,8 +1,10 @@
 # Visão de contexto
 
-> Status: desenho-alvo. Só o esqueleto do NestJS existe até agora — nenhum
-> módulo de domínio foi implementado ainda. Atualize este diagrama assim
-> que a realidade divergir dele.
+> Status: real, menos o frete. `auth`, `catalog`, `orders` e `payments`
+> existem, e a seta pro Stripe é código — inclusive na volta, que o
+> diagrama não mostra: o Stripe chama `POST /payments/webhook` de volta
+> pra confirmar pagamento e reembolso. O provedor de frete continua
+> desenho-alvo. Atualize este diagrama assim que a realidade divergir dele.
 
 `commerce-core` é o único core de API que qualquer front-end (loja, app
 mobile, painel admin) consome. Ele não serve HTML nem tem UI própria.
