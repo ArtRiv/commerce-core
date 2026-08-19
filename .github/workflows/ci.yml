@@ -1,0 +1,82 @@
+# The gate every branch clears before it merges.
+#
+# Deliberately not the whole test pyramid. This job runs only what needs no
+# secrets and no database, which is what keeps it near two minutes and green on
+# a fresh clone. The 125 e2e tests are absent on purpose: they need a real
+# Postgres, and pointing them at the Supabase instance this project develops
+# against would TRUNCATE the developer's own tables mid-run. When they do land
+# here they get their own ephemeral service container, as a second job.
+#
+# There is no `env:` block and no .env file anywhere in this job, and that is
+# load-bearing rather than incidental: test/payments-live.e2e-spec.ts reads
+# STRIPE_SECRET_KEY out of the .env FILE (not the environment) and talks to
+# real Stripe for any value starting with `sk_` other than the `sk_test_offline`
+# sentinel. A step that writes a .env with a placeholder key would wake it up
+# and fail the build — or worse, reach a real account. Anything that needs
+# configuration passes it through `env:`, never by writing .env.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push while CI is still running makes the first run answer a stale
+# question; cancel it rather than pay for both.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: lint, typecheck, unit tests, build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Before setup-node, because its `cache: pnpm` asks pnpm where the store
+      # lives and so needs pnpm on PATH already. No `version:` input here — the
+      # action reads package.json's packageManager field, and passing both is
+      # an error the day the two disagree.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # --frozen-lockfile is one of the checks the pre-commit hook cannot make:
+      # it fails when pnpm-lock.yaml and package.json disagree instead of
+      # quietly resolving a different dependency tree than the one that was
+      # tested locally.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # src/generated is gitignored, so a fresh checkout has no Prisma client
+      # and the three steps below would fail on unresolved imports. Only the
+      # test scripts generate it for themselves (pretest / pretest:e2e); lint,
+      # typecheck and build do not. It needs no DATABASE_URL — generation reads
+      # the schema, never the database.
+      - name: Generate Prisma client
+        run: pnpm exec prisma generate
+
+      # lint:check, not lint: `pnpm lint` runs eslint --fix, and a CI step that
+      # repairs the tree it is judging reports green on code nobody committed.
+      # This also covers every file in the project, where the pre-commit hook
+      # only ever sees the staged ones.
+      - name: Lint
+        run: pnpm lint:check
+
+      # Whole-project type check. The hook's type-aware lint rules only run
+      # over staged files, so a change that breaks a type somewhere else is
+      # invisible to it.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # 252 unit tests, ~20s, no environment variables required.
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
