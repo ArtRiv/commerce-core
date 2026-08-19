@@ -16,7 +16,17 @@ import type {
   SessionLookup,
 } from '../payments/payment-provider';
 import type { PrismaService } from '../prisma/prisma.service';
-import { OrdersService, type ShippingAddress } from './orders.service';
+import type {
+  ShippingOption,
+  ShippingQuoteRequest,
+} from '../shipping/shipping-provider';
+import type { CartService } from './cart.service';
+import {
+  type CheckoutInput,
+  OrdersService,
+  type ShippingAddress,
+} from './orders.service';
+import { ShippingQuoteService } from './shipping-quote.service';
 
 const ADDRESS: ShippingAddress = {
   line1: 'Rua das Flores, 123',
@@ -25,10 +35,33 @@ const ADDRESS: ShippingAddress = {
   postalCode: '80000-000',
 };
 
+/** What the table provider offers for ADDRESS in these tests. */
+const SHIPPING_OPTION: ShippingOption = {
+  code: 'padrao-brasil',
+  label: 'Entrega padrão',
+  priceCents: 1990,
+  estimatedDays: 10,
+  carrier: null,
+};
+
+/** Matches SHIPPING_DEFAULT_WEIGHT_GRAMS' fallback in ShippingModule. */
+const DEFAULT_WEIGHT_GRAMS = 500;
+
+function checkoutInput(overrides: Partial<CheckoutInput> = {}): CheckoutInput {
+  return {
+    address: ADDRESS,
+    shippingOptionCode: SHIPPING_OPTION.code,
+    quotedShippingCents: SHIPPING_OPTION.priceCents,
+    ...overrides,
+  };
+}
+
 interface OrderRow {
   id: string;
   userId: string;
   status: OrderStatus;
+  itemsSubtotalCents: number;
+  shippingCents: number;
   totalCents: number;
   paymentRef: string | null;
   paymentIntentRef: string | null;
@@ -45,7 +78,13 @@ function orderRow(overrides: Partial<OrderRow> = {}): OrderRow {
     id: 'order-1',
     userId: 'user-1',
     status: OrderStatus.CREATED,
-    totalCents: 4500,
+    // 2 × 1000 + 1 × 2500 of items, plus SHIPPING_OPTION's freight. totalCents
+    // is the sum — the row a database holding the CHECK constraint would give
+    // back — which is what makes the createPayment assertions below a real
+    // proof that freight reaches the card.
+    itemsSubtotalCents: 4500,
+    shippingCents: 1990,
+    totalCents: 6490,
     paymentRef: null,
     paymentIntentRef: null,
     items: [],
@@ -127,6 +166,7 @@ function createProductsMock() {
           priceCents: number;
           status: ProductStatus;
           stockQuantity: number;
+          weightGrams: number | null;
         }[]
       >,
       [string[]]
@@ -165,16 +205,33 @@ function createPaymentsMock() {
   };
 }
 
+/**
+ * Only the PROVIDER is doubled — the module boundary — while the real
+ * ShippingQuoteService runs. Its price assertion and its 503 translation are
+ * domain rules of this module, and mocking them out would leave the rules that
+ * decide what a customer is charged untested. Same stance the workflow takes
+ * about mocking only what crosses the border.
+ */
+function createShippingProviderMock() {
+  return {
+    quote: jest
+      .fn<Promise<ShippingOption[]>, [ShippingQuoteRequest]>()
+      .mockResolvedValue([SHIPPING_OPTION]),
+  };
+}
+
 type PrismaMock = ReturnType<typeof createPrismaMock>;
 type ProductsMock = ReturnType<typeof createProductsMock>;
 type StockMock = ReturnType<typeof createStockMock>;
 type PaymentsMock = ReturnType<typeof createPaymentsMock>;
+type ShippingMock = ReturnType<typeof createShippingProviderMock>;
 
 interface Mocks {
   prisma: PrismaMock;
   products: ProductsMock;
   stock: StockMock;
   payments: PaymentsMock;
+  shipping: ShippingMock;
 }
 
 function createMocks(): Mocks {
@@ -183,15 +240,22 @@ function createMocks(): Mocks {
     products: createProductsMock(),
     stock: createStockMock(),
     payments: createPaymentsMock(),
+    shipping: createShippingProviderMock(),
   };
 }
 
-function serviceWith({ prisma, products, stock, payments }: Mocks) {
+function serviceWith({ prisma, products, stock, payments, shipping }: Mocks) {
   return new OrdersService(
     prisma as unknown as PrismaService,
     products as unknown as ProductsService,
     stock as unknown as StockService,
     payments,
+    new ShippingQuoteService(
+      // Checkout never reads a cart through this service — it already has one.
+      { getCart: jest.fn() } as unknown as CartService,
+      shipping,
+      DEFAULT_WEIGHT_GRAMS,
+    ),
   );
 }
 
@@ -226,6 +290,9 @@ function sellableProduct(
     priceCents,
     status: ProductStatus.ACTIVE,
     stockQuantity: 10,
+    // Null on purpose: most of the catalogue predates the weight column, so
+    // the default-weight path is the one the tests exercise by default.
+    weightGrams: null,
   };
 }
 
@@ -257,13 +324,18 @@ describe('OrdersService', () => {
       const mocks = createMocks();
       primeHappyPath(mocks);
 
-      await serviceWith(mocks).checkout('user-1', ADDRESS);
+      await serviceWith(mocks).checkout('user-1', checkoutInput());
 
       const [args] = mocks.prisma.order.create.mock.calls[0] as [
         {
           data: {
             userId: string;
+            itemsSubtotalCents: number;
+            shippingCents: number;
             totalCents: number;
+            shippingMethodCode: string;
+            shippingMethodName: string;
+            shippingEtaDays: number | null;
             shippingLine1: string;
             items: {
               create: {
@@ -278,7 +350,14 @@ describe('OrdersService', () => {
       ];
       expect(args.data.userId).toBe('user-1');
       // 2 × 1000 + 1 × 2500 — the snapshot's arithmetic, not the catalog's.
-      expect(args.data.totalCents).toBe(4500);
+      expect(args.data.itemsSubtotalCents).toBe(4500);
+      expect(args.data.shippingCents).toBe(1990);
+      // The identity the database also holds as a CHECK constraint.
+      expect(args.data.totalCents).toBe(6490);
+      // Frozen beside the price: a number with no method is not auditable.
+      expect(args.data.shippingMethodCode).toBe('padrao-brasil');
+      expect(args.data.shippingMethodName).toBe('Entrega padrão');
+      expect(args.data.shippingEtaDays).toBe(10);
       expect(args.data.shippingLine1).toBe(ADDRESS.line1);
       expect(args.data.items.create).toEqual([
         {
@@ -300,7 +379,7 @@ describe('OrdersService', () => {
       const mocks = createMocks();
       primeHappyPath(mocks);
 
-      await serviceWith(mocks).checkout('user-1', ADDRESS);
+      await serviceWith(mocks).checkout('user-1', checkoutInput());
 
       expect(mocks.prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(mocks.stock.decrement).toHaveBeenCalledWith(
@@ -319,11 +398,17 @@ describe('OrdersService', () => {
       const mocks = createMocks();
       primeHappyPath(mocks);
 
-      const order = await serviceWith(mocks).checkout('user-1', ADDRESS);
+      const order = await serviceWith(mocks).checkout(
+        'user-1',
+        checkoutInput(),
+      );
 
+      // Items AND freight. This is the assertion the whole shipping module
+      // exists to keep true: totalCents is what the buyer is charged, so
+      // freight reaches the card without payments knowing shipping exists.
       expect(mocks.payments.createPayment).toHaveBeenCalledWith({
         orderId: 'order-1',
-        amountCents: 4500,
+        amountCents: 6490,
         mode: undefined,
       });
       const [updateArgs] = mocks.prisma.order.updateMany.mock.calls[0] as [
@@ -368,8 +453,7 @@ describe('OrdersService', () => {
 
       const order = await serviceWith(mocks).checkout(
         'user-1',
-        ADDRESS,
-        'embedded',
+        checkoutInput({ paymentMode: 'embedded' }),
       );
 
       expect(mocks.payments.createPayment).toHaveBeenCalledWith(
@@ -384,7 +468,10 @@ describe('OrdersService', () => {
       primeHappyPath(mocks);
       mocks.payments.createPayment.mockRejectedValue(new Error('stripe down'));
 
-      const order = await serviceWith(mocks).checkout('user-1', ADDRESS);
+      const order = await serviceWith(mocks).checkout(
+        'user-1',
+        checkoutInput(),
+      );
 
       // The order is real and the stock is committed; only the way to pay is
       // missing, and POST /orders/:id/pay exists to supply it. Failing the
@@ -400,12 +487,12 @@ describe('OrdersService', () => {
       mocks.prisma.cart.findUnique.mockResolvedValue(null);
 
       await expect(
-        serviceWith(mocks).checkout('user-1', ADDRESS),
+        serviceWith(mocks).checkout('user-1', checkoutInput()),
       ).rejects.toThrow(ConflictException);
 
       mocks.prisma.cart.findUnique.mockResolvedValue(cartWith([]));
       await expect(
-        serviceWith(mocks).checkout('user-1', ADDRESS),
+        serviceWith(mocks).checkout('user-1', checkoutInput()),
       ).rejects.toThrow(ConflictException);
 
       expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
@@ -427,7 +514,7 @@ describe('OrdersService', () => {
         },
       ]);
 
-      const attempt = serviceWith(mocks).checkout('user-1', ADDRESS);
+      const attempt = serviceWith(mocks).checkout('user-1', checkoutInput());
 
       await expect(attempt).rejects.toThrow(ConflictException);
       await expect(attempt).rejects.toMatchObject({
@@ -442,7 +529,7 @@ describe('OrdersService', () => {
       mocks.stock.decrement.mockResolvedValueOnce(true);
       mocks.stock.decrement.mockResolvedValueOnce(false);
 
-      const attempt = serviceWith(mocks).checkout('user-1', ADDRESS);
+      const attempt = serviceWith(mocks).checkout('user-1', checkoutInput());
 
       await expect(attempt).rejects.toThrow(ConflictException);
       await expect(attempt).rejects.toMatchObject({
@@ -454,6 +541,150 @@ describe('OrdersService', () => {
       expect(mocks.payments.createPayment).not.toHaveBeenCalled();
     });
 
+    it('quotes with resolved weights and the items subtotal', async () => {
+      const mocks = createMocks();
+      primeHappyPath(mocks);
+
+      await serviceWith(mocks).checkout('user-1', checkoutInput());
+
+      // Weightless products resolve to the configured default BEFORE the
+      // boundary, so no provider — ours or a carrier's — ever sees a null.
+      expect(mocks.shipping.quote).toHaveBeenCalledWith({
+        destination: { postalCode: ADDRESS.postalCode },
+        subtotalCents: 4500,
+        items: [
+          {
+            productId: 'p1',
+            quantity: 2,
+            unitPriceCents: 1000,
+            weightGrams: DEFAULT_WEIGHT_GRAMS,
+          },
+          {
+            productId: 'p2',
+            quantity: 1,
+            unitPriceCents: 2500,
+            weightGrams: DEFAULT_WEIGHT_GRAMS,
+          },
+        ],
+      });
+    });
+
+    it('carries a real product weight through untouched', async () => {
+      const mocks = createMocks();
+      primeHappyPath(mocks);
+      mocks.products.findByIds.mockResolvedValue([
+        { ...sellableProduct('p1', 1000, 'Camiseta'), weightGrams: 350 },
+        sellableProduct('p2', 2500, 'Caneca'),
+      ]);
+
+      await serviceWith(mocks).checkout('user-1', checkoutInput());
+
+      const [request] = mocks.shipping.quote.mock.calls[0];
+      expect(request.items[0].weightGrams).toBe(350);
+      expect(request.items[1].weightGrams).toBe(DEFAULT_WEIGHT_GRAMS);
+    });
+
+    it('409s when the quoted price no longer matches, before any write', async () => {
+      const mocks = createMocks();
+      primeHappyPath(mocks);
+      mocks.shipping.quote.mockResolvedValue([
+        { ...SHIPPING_OPTION, priceCents: 2990 },
+      ]);
+
+      // The customer was shown 19.90 and the table now says 29.90. Charging
+      // the new price silently would never undercharge us — it would charge
+      // them something they never saw.
+      const attempt = serviceWith(mocks).checkout(
+        'user-1',
+        checkoutInput({ quotedShippingCents: 1990 }),
+      );
+
+      await expect(attempt).rejects.toThrow(ConflictException);
+      await expect(attempt).rejects.toMatchObject({
+        response: expect.objectContaining({
+          shippingOptions: [expect.objectContaining({ priceCents: 2990 })],
+        }) as unknown,
+      });
+      expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
+      expect(mocks.prisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it('409s when the chosen option is not on offer', async () => {
+      const mocks = createMocks();
+      primeHappyPath(mocks);
+
+      const attempt = serviceWith(mocks).checkout(
+        'user-1',
+        checkoutInput({ shippingOptionCode: 'expresso-lua' }),
+      );
+
+      await expect(attempt).rejects.toThrow(ConflictException);
+      expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('409s when nothing serves the postal code', async () => {
+      const mocks = createMocks();
+      primeHappyPath(mocks);
+      // An empty list is the provider saying "we do not deliver there" — a
+      // fact about the address, not a failure.
+      mocks.shipping.quote.mockResolvedValue([]);
+
+      const attempt = serviceWith(mocks).checkout('user-1', checkoutInput());
+
+      await expect(attempt).rejects.toThrow(ConflictException);
+      await expect(attempt).rejects.toMatchObject({
+        response: expect.objectContaining({ shippingOptions: [] }) as unknown,
+      });
+      expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('503s and creates nothing when shipping cannot be quoted', async () => {
+      const mocks = createMocks();
+      const logger = muteLogger();
+      primeHappyPath(mocks);
+      mocks.shipping.quote.mockRejectedValue(new Error('carrier down'));
+
+      // The opposite of the payment-provider outage above, on purpose: an
+      // order with no session is recoverable through /pay, but an order with
+      // no freight has the wrong total and nothing can repair it afterwards.
+      await expect(
+        serviceWith(mocks).checkout('user-1', checkoutInput()),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
+      expect(mocks.stock.decrement).not.toHaveBeenCalled();
+      expect(mocks.prisma.order.create).not.toHaveBeenCalled();
+      expect(mocks.payments.createPayment).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('stores free shipping as a zero price with the method still frozen', async () => {
+      const mocks = createMocks();
+      primeHappyPath(mocks);
+      mocks.shipping.quote.mockResolvedValue([
+        { ...SHIPPING_OPTION, priceCents: 0 },
+      ]);
+
+      await serviceWith(mocks).checkout(
+        'user-1',
+        checkoutInput({ quotedShippingCents: 0 }),
+      );
+
+      const [args] = mocks.prisma.order.create.mock.calls[0] as [
+        {
+          data: {
+            shippingCents: number;
+            totalCents: number;
+            shippingMethodCode: string;
+          };
+        },
+      ];
+      expect(args.data.shippingCents).toBe(0);
+      expect(args.data.totalCents).toBe(4500);
+      // What tells free shipping apart from an order that predates freight.
+      expect(args.data.shippingMethodCode).toBe('padrao-brasil');
+    });
+
     it('409s when a concurrent checkout already consumed the cart', async () => {
       const mocks = createMocks();
       primeHappyPath(mocks);
@@ -461,7 +692,7 @@ describe('OrdersService', () => {
       mocks.prisma.cartItem.deleteMany.mockResolvedValue({ count: 0 });
 
       await expect(
-        serviceWith(mocks).checkout('user-1', ADDRESS),
+        serviceWith(mocks).checkout('user-1', checkoutInput()),
       ).rejects.toThrow(ConflictException);
       expect(mocks.stock.decrement).not.toHaveBeenCalled();
       expect(mocks.prisma.order.create).not.toHaveBeenCalled();
@@ -709,9 +940,11 @@ describe('OrdersService', () => {
 
       const result = await serviceWith(mocks).pay(userWith(), 'order-1');
 
+      // The stored grand total, freight included — a recovery session must
+      // never re-issue for the items alone.
       expect(mocks.payments.createPayment).toHaveBeenCalledWith({
         orderId: 'order-1',
-        amountCents: 4500,
+        amountCents: 6490,
         mode: undefined,
       });
       expect(result.payment.url).toBe('https://pay.example/cs_1');
@@ -1010,6 +1243,46 @@ describe('OrdersService', () => {
       await expect(serviceWith(mocks).ship('order-1')).rejects.toThrow(
         ConflictException,
       );
+    });
+
+    it('stamps tracking details when shipping with them', async () => {
+      const mocks = createMocks();
+
+      await serviceWith(mocks).ship('order-1', {
+        trackingCode: 'BR123456789BR',
+        trackingUrl: 'https://rastreio.example/BR123456789BR',
+      });
+
+      const [args] = mocks.prisma.order.updateMany.mock.calls[0] as [
+        {
+          where: { id: string; status: OrderStatus };
+          data: { trackingCode?: string; trackingUrl?: string };
+        },
+      ];
+      // Still the same conditional UPDATE — tracking rides along on the
+      // existing transition rather than becoming a state of its own.
+      expect(args.where).toEqual({
+        id: 'order-1',
+        status: OrderStatus.PAID,
+      });
+      expect(args.data.trackingCode).toBe('BR123456789BR');
+      expect(args.data.trackingUrl).toBe(
+        'https://rastreio.example/BR123456789BR',
+      );
+    });
+
+    it('ships without tracking, leaving the columns alone', async () => {
+      const mocks = createMocks();
+
+      // A courier or a hand-off arranged by phone has no code to give, and
+      // that is a real shipment — requiring one would block it.
+      await serviceWith(mocks).ship('order-1');
+
+      const [args] = mocks.prisma.order.updateMany.mock.calls[0] as [
+        { data: Record<string, unknown> },
+      ];
+      expect(args.data).not.toHaveProperty('trackingCode');
+      expect(args.data).not.toHaveProperty('trackingUrl');
     });
   });
 });

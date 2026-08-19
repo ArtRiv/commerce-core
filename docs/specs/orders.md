@@ -83,7 +83,9 @@ dos outros módulos.
   webhook (verificação de assinatura, idempotência de retry) é da spec
   de payments
 - Frete real (`ShippingProvider`, cálculo de frete) — v1 só guarda o
-  endereço; a seta `orders → shipping` do diagrama continua alvo
+  endereço; a seta `orders → shipping` do diagrama continua alvo.
+  **Entregue depois** em [`shipping.md`](shipping.md): o checkout passa a
+  exigir a opção de frete escolhida, e `totalCents` passa a incluí-la
 - Cupons, address book do usuário, trava de preço no carrinho
   (carrinho mostra sempre preço vivo do catálogo)
 
@@ -94,10 +96,19 @@ dos outros módulos.
   catálogo. Carrinho nunca "envelhece" — quem envelhece é o preço, e o
   cliente vê o atual.
 - **Pedido é registro imutável.** `order_items` congela `productName` e
-  `unitPriceCents` no instante do checkout; `totalCents` no pedido é a
-  soma `unitPriceCents × quantity` dos itens. Mudança de preço no
-  catálogo depois da compra nunca altera pedido existente. Nenhum
-  endpoint edita itens de pedido.
+  `unitPriceCents` no instante do checkout. Mudança de preço no catálogo
+  depois da compra nunca altera pedido existente. Nenhum endpoint edita
+  itens de pedido.
+
+  > **Atualizado por [`shipping.md`](shipping.md).** `totalCents` era a
+  > soma `unitPriceCents × quantity` dos itens; hoje essa soma é
+  > `itemsSubtotalCents`, e **`totalCents` é o total cobrado**
+  > (`itemsSubtotalCents + shippingCents`), com a identidade garantida por
+  > `CHECK` no banco. Como `payments` cobra `order.totalCents`, é essa
+  > redefinição que faz o frete chegar ao cartão sem `payments` saber que
+  > frete existe. Pedidos anteriores ao frete foram backfillados de forma
+  > aritmeticamente neutra (`itemsSubtotalCents = totalCents`,
+  > `shippingCents = 0`), então nenhum registro financeiro mudou de valor.
 - **`order_items.productId` é FK real com `onDelete: Restrict`** —
   seguro porque o catálogo nunca apaga produto, só arquiva (invariante
   do catalog). O snapshot é o que se exibe; a FK é rastreabilidade.
@@ -369,6 +380,9 @@ Checkout:
       recebo `201` com pedido `CREATED`: itens com snapshot de nome e
       preço, `totalCents` = soma dos subtotais, estoque decrementado,
       carrinho vazio e `paymentRef` preenchido pelo provider fake.
+      (Depois de [`shipping.md`](shipping.md) o checkout também exige
+      `shippingOptionCode`/`quotedShippingCents`, e a soma dos subtotais
+      passa a ser `itemsSubtotalCents`.)
 - [x] Dado um pedido criado, quando o preço do produto muda no
       catálogo, então o pedido mantém o preço do momento da compra.
 - [x] Dado um item com estoque insuficiente (ou produto que virou

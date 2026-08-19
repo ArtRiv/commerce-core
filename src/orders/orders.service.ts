@@ -21,6 +21,10 @@ import {
   type PaymentSession,
 } from '../payments/payment-provider';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  itemsSubtotalCents,
+  ShippingQuoteService,
+} from './shipping-quote.service';
 
 export interface ShippingAddress {
   line1: string;
@@ -28,6 +32,20 @@ export interface ShippingAddress {
   city: string;
   state: string;
   postalCode: string;
+}
+
+export interface OrderTracking {
+  trackingCode?: string;
+  trackingUrl?: string;
+}
+
+export interface CheckoutInput {
+  address: ShippingAddress;
+  /** The `code` of an option the customer was just quoted. */
+  shippingOptionCode: string;
+  /** What they were shown. Compared with a fresh quote, never charged. */
+  quotedShippingCents: number;
+  paymentMode?: CheckoutMode;
 }
 
 export interface ListOrdersInput {
@@ -106,13 +124,12 @@ export class OrdersService {
     private readonly products: ProductsService,
     private readonly stock: StockService,
     @Inject(PAYMENT_PROVIDER) private readonly payments: PaymentProvider,
+    private readonly shipping: ShippingQuoteService,
   ) {}
 
-  async checkout(
-    userId: string,
-    address: ShippingAddress,
-    mode?: CheckoutMode,
-  ) {
+  async checkout(userId: string, input: CheckoutInput) {
+    const { address } = input;
+
     const cart = await this.prisma.cart.findUnique({
       where: { userId },
       include: { items: { orderBy: { id: 'asc' } } },
@@ -139,10 +156,31 @@ export class OrdersService {
       });
     }
 
-    const totalCents = cart.items.reduce(
-      (sum, item) =>
-        sum + (byId.get(item.productId)?.priceCents ?? 0) * item.quantity,
-      0,
+    const lines = cart.items.map((item) => {
+      const product = byId.get(item.productId);
+
+      return {
+        productId: item.productId,
+        quantity: item.quantity,
+        unitPriceCents: product?.priceCents ?? 0,
+        weightGrams: product?.weightGrams ?? null,
+      };
+    });
+
+    const subtotalCents = itemsSubtotalCents(lines);
+
+    // Freight is priced BEFORE anything is committed, and unlike the payment
+    // call further down, a failure here aborts the checkout (503). The
+    // asymmetry is deliberate: an order without a payment session is
+    // recoverable — POST /orders/:id/pay exists for exactly that — but an
+    // order without freight is an order with the wrong total, born immutable
+    // and about to be charged. There is no route that repairs that, so the
+    // only safe moment to fail is before the order exists.
+    const options = await this.shipping.quote(address.postalCode, lines);
+    const shipping = this.shipping.select(
+      options,
+      input.shippingOptionCode,
+      input.quotedShippingCents,
     );
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -179,12 +217,21 @@ export class OrdersService {
       return tx.order.create({
         data: {
           userId,
-          totalCents,
+          itemsSubtotalCents: subtotalCents,
+          shippingCents: shipping.priceCents,
+          // The amount charged. A CHECK constraint holds this identity in the
+          // database too, so no future write can put the three out of step.
+          totalCents: subtotalCents + shipping.priceCents,
           shippingLine1: address.line1,
           shippingLine2: address.line2 ?? null,
           shippingCity: address.city,
           shippingState: address.state,
           shippingPostalCode: address.postalCode,
+          // Frozen like the price: a bare number is not auditable, and the
+          // confirmation email needs the promise that came with it.
+          shippingMethodCode: shipping.code,
+          shippingMethodName: shipping.label,
+          shippingEtaDays: shipping.estimatedDays,
           items: {
             create: cart.items.map((item) => {
               const product = byId.get(item.productId);
@@ -211,7 +258,7 @@ export class OrdersService {
     // route is POST /orders/:id/pay.
     let payment: PaymentSessionView | null = null;
     try {
-      payment = await this.issueSession(created, mode);
+      payment = await this.issueSession(created, input.paymentMode);
     } catch (error: unknown) {
       this.logger.error(
         `Order ${created.id} was created but the payment provider failed: ${describe(error)}`,
@@ -475,12 +522,25 @@ export class OrdersService {
     );
   }
 
-  ship(id: string) {
+  /**
+   * PAID → SHIPPED, optionally stamping tracking details.
+   *
+   * Tracking is data hung on an existing transition, not a new state: a
+   * shipment with no code — a courier, a local hand-off — is still a
+   * shipment, so an absent code leaves the columns null rather than blocking.
+   */
+  ship(id: string, tracking: OrderTracking = {}) {
     return this.transition(
       id,
       OrderStatus.PAID,
       OrderStatus.SHIPPED,
       'shippedAt',
+      {
+        ...(tracking.trackingCode
+          ? { trackingCode: tracking.trackingCode }
+          : {}),
+        ...(tracking.trackingUrl ? { trackingUrl: tracking.trackingUrl } : {}),
+      },
     );
   }
 

@@ -33,11 +33,22 @@ interface CartResponse {
   }[];
 }
 
+interface ShippingOptionResponse {
+  code: string;
+  label: string;
+  priceCents: number;
+  estimatedDays: number | null;
+}
+
 interface OrderResponse {
   id: string;
   userId: string;
   status: OrderStatus;
+  itemsSubtotalCents: number;
+  shippingCents: number;
   totalCents: number;
+  shippingMethodCode: string | null;
+  trackingCode: string | null;
   paymentRef: string | null;
   paidAt: string | null;
   cancelledAt: string | null;
@@ -154,17 +165,54 @@ describe('Orders (e2e)', () => {
     return response.body as CartResponse;
   }
 
-  function checkout(token: string) {
-    return http()
-      .post('/orders')
+  /**
+   * The freight the store would quote for this cart right now — what a real
+   * storefront shows the customer before they confirm.
+   */
+  async function firstOption(token: string): Promise<ShippingOptionResponse> {
+    const response = await http()
+      .post('/shipping/quote')
       .set('Authorization', `Bearer ${token}`)
-      .send({ shippingAddress: ADDRESS });
+      .send({ postalCode: ADDRESS.postalCode })
+      .expect(200);
+
+    const { options } = response.body as { options: ShippingOptionResponse[] };
+
+    return options[0];
   }
 
+  /**
+   * Checkout takes the option's CODE plus the price it was quoted at; the
+   * server re-quotes and compares. Kept chainable so the concurrency case can
+   * still fire two requests at once.
+   */
+  function checkout(token: string, shipping: ShippingOptionResponse) {
+    return http().post('/orders').set('Authorization', `Bearer ${token}`).send({
+      shippingAddress: ADDRESS,
+      shippingOptionCode: shipping.code,
+      quotedShippingCents: shipping.priceCents,
+    });
+  }
+
+  /** Quotes and then checks out, the way a storefront does. */
   async function checkedOutOrder(token: string): Promise<OrderResponse> {
-    const response = await checkout(token).expect(201);
+    const response = await checkout(token, await firstOption(token)).expect(
+      201,
+    );
+
     return response.body as OrderResponse;
   }
+
+  /**
+   * For the cases that never reach the freight rules — an empty cart is
+   * refused before anything is quoted — so the values here are only shape.
+   */
+  const UNUSED_OPTION: ShippingOptionResponse = {
+    code: 'padrao-brasil',
+    label: 'Entrega padrão',
+    priceCents: 0,
+    estimatedDays: null,
+  };
 
   async function stockOf(productId: string): Promise<number> {
     const product = await prisma.product.findUniqueOrThrow({
@@ -322,7 +370,17 @@ describe('Orders (e2e)', () => {
       const order = await checkedOutOrder(customerToken);
 
       expect(order.status).toBe(OrderStatus.CREATED);
-      expect(order.totalCents).toBe(4500);
+      // The items' own arithmetic, unchanged by freight...
+      expect(order.itemsSubtotalCents).toBe(4500);
+      // ...and the amount actually charged, which is that plus the freight
+      // this cart was quoted. The exact figure belongs to the freight table,
+      // so the identity is what matters here (shipping.e2e-spec.ts pins the
+      // numbers).
+      expect(order.totalCents).toBe(
+        order.itemsSubtotalCents + order.shippingCents,
+      );
+      expect(order.shippingCents).toBeGreaterThan(0);
+      expect(order.shippingMethodCode).not.toBeNull();
       // A checkout session opened by the provider; what it does after that is
       // test/payments.e2e-spec.ts's business.
       expect(order.paymentRef).toMatch(/^cs_test_/);
@@ -370,7 +428,10 @@ describe('Orders (e2e)', () => {
         .expect(200);
       const body = fetched.body as OrderResponse;
       expect(body.items[0].unitPriceCents).toBe(4990);
-      expect(body.totalCents).toBe(4990);
+      expect(body.itemsSubtotalCents).toBe(4990);
+      expect(body.totalCents).toBe(
+        body.itemsSubtotalCents + body.shippingCents,
+      );
     });
 
     it('409s naming the item when stock is insufficient, changing nothing', async () => {
@@ -379,7 +440,10 @@ describe('Orders (e2e)', () => {
       await addToCart(customerToken, scarce.id, 2);
       await addToCart(customerToken, plenty.id, 1);
 
-      const response = await checkout(customerToken).expect(409);
+      const response = await checkout(
+        customerToken,
+        await firstOption(customerToken),
+      ).expect(409);
 
       expect((response.body as { productIds: string[] }).productIds).toEqual([
         scarce.id,
@@ -405,14 +469,18 @@ describe('Orders (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
 
-      const response = await checkout(customerToken).expect(409);
+      // Quoted while the product was still sellable, which is exactly the
+      // race this 409 is about.
+      const response = await checkout(customerToken, UNUSED_OPTION).expect(409);
       expect((response.body as { productIds: string[] }).productIds).toEqual([
         product.id,
       ]);
     });
 
     it('409s an empty cart and 400s a checkout without an address', async () => {
-      await checkout(customerToken).expect(409);
+      // The empty cart is refused before freight is ever quoted, so the
+      // shipping fields here are never read.
+      await checkout(customerToken, UNUSED_OPTION).expect(409);
 
       await http()
         .post('/orders')
@@ -425,9 +493,10 @@ describe('Orders (e2e)', () => {
       const product = await createProduct();
       await addToCart(customerToken, product.id, 1);
 
+      const option = await firstOption(customerToken);
       const [first, second] = await Promise.all([
-        checkout(customerToken),
-        checkout(customerToken),
+        checkout(customerToken, option),
+        checkout(customerToken, option),
       ]);
 
       // The cart is consumed inside the transaction with a counted delete —

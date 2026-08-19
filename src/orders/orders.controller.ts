@@ -17,6 +17,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { CheckoutDto } from './dto/checkout.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import { PayOrderDto } from './dto/pay-order.dto';
+import { ShipOrderDto } from './dto/ship-order.dto';
 import { OrdersService } from './orders.service';
 import { RATE_LIMITS } from './rate-limits';
 
@@ -33,12 +34,18 @@ export class OrdersController {
 
   /**
    * Checkout: converts the caller's cart into an order and answers with the
-   * way to pay it. A provider outage does not fail this — the order is real,
-   * `payment` comes back null, and /pay below issues the session later.
+   * way to pay it. A PAYMENT provider outage does not fail this — the order is
+   * real, `payment` comes back null, and /pay below issues the session later.
+   * A SHIPPING one does (503): an order with no freight has the wrong total.
    */
   @Post()
   checkout(@CurrentUser() user: AuthenticatedUser, @Body() dto: CheckoutDto) {
-    return this.orders.checkout(user.id, dto.shippingAddress, dto.paymentMode);
+    return this.orders.checkout(user.id, {
+      address: dto.shippingAddress,
+      shippingOptionCode: dto.shippingOptionCode,
+      quotedShippingCents: dto.quotedShippingCents,
+      paymentMode: dto.paymentMode,
+    });
   }
 
   /**
@@ -103,11 +110,12 @@ export class OrdersController {
     return this.orders.refund(id);
   }
 
+  /** Tracking details are optional — see ShipOrderDto for why. */
   @RequirePermissions(PERMISSIONS.ORDERS_UPDATE_STATUS)
   @HttpCode(200)
   @Post(':id/ship')
-  ship(@Param('id') id: string) {
-    return this.orders.ship(id);
+  ship(@Param('id') id: string, @Body() dto: ShipOrderDto) {
+    return this.orders.ship(id, dto);
   }
 
   @RequirePermissions(PERMISSIONS.ORDERS_UPDATE_STATUS)

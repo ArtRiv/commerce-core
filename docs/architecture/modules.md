@@ -1,8 +1,8 @@
 # Mapa de módulos internos
 
-> Status: quase todo real. `auth`, `catalog`, `orders`, `payments`
-> (Stripe de verdade), `prisma` e `mail` existem; `shipping` continua
-> desenho-alvo — a seta `orders → shipping` é intenção, não código. Se um
+> Status: real, inteiro. `auth`, `catalog`, `orders`, `payments` (Stripe
+> de verdade), `shipping` (tabela de frete por faixa de CEP), `prisma` e
+> `mail` existem, e as três setas que saem de `orders` são código. Se um
 > módulo passar a depender de outro de um jeito não previsto aqui, o
 > diagrama está desatualizado, não o código.
 
@@ -39,10 +39,11 @@ flowchart LR
 ## Regras de dependência
 
 - `orders` é o orquestrador: conhece `catalog` (checar produto/estoque),
-  `payments` (cobrar) e `shipping` (calcular frete — ainda alvo). Nenhum
-  desses três conhece `orders` de volta. O contrato do lado de `catalog`
+  `payments` (cobrar) e `shipping` (calcular frete). Nenhum desses três
+  conhece `orders` de volta. O contrato do lado de `catalog`
   está em uso: `CatalogModule` exporta `ProductsService` (`findByIds`,
-  a leitura em lote do que está sendo comprado) e `StockService`
+  a leitura em lote do que está sendo comprado, e por onde o peso do
+  produto chega ao frete) e `StockService`
   (`decrement`, o UPDATE condicional atômico do checkout, e `restock`,
   a devolução do cancelamento — ambos aceitam um client de transação
   pro checkout/cancelamento serem atômicos através da fronteira) —
@@ -72,9 +73,22 @@ flowchart LR
   `orders`. `payments` já existe nessa forma completa: o token
   `PAYMENT_PROVIDER` com `StripePaymentProvider` atrás (ou
   `FakePaymentProvider`, quando não há chave configurada e o ambiente não
-  é produção), mesmo padrão do `mail`. Não é `@Global` de propósito: só
-  `orders` cobra dinheiro, e importar o módulo é o que mantém essa
-  dependência visível no grafo.
+  é produção), mesmo padrão do `mail`. Nenhum dos dois é `@Global` de
+  propósito: só `orders` cobra dinheiro e calcula frete, e importar o
+  módulo é o que mantém essa dependência visível no grafo.
+- **`shipping` é folha e precisa continuar sendo.** Ele não conhece
+  `catalog` nem `orders`: quem lê o carrinho, resolve o peso dos produtos
+  (pelo `findByIds` que já existia) e monta o request é `orders`. O token
+  `SHIPPING_PROVIDER` esconde o `TableShippingProvider` — tabela por faixa
+  de CEP configurada por ambiente, que é o provedor **real** da v1, não um
+  fake. Ao lado dele o módulo exporta `SHIPPING_DEFAULT_WEIGHT_GRAMS`, pra
+  que toda variável `SHIPPING_*` continue sendo lida só aqui.
+- **A cotação de frete é rota do `orders`**, não do `shipping`, mesmo
+  servindo `/shipping/quote` — mesmo argumento do webhook de pagamento:
+  cotar exige ler o **carrinho**. Hospedar em `shipping` faria `shipping`
+  depender de `orders` (ou de `catalog`, pelos pesos), que é ciclo. O que
+  cruza a fronteira é um request já pronto, em vocabulário nosso.
+  Ver [`docs/specs/shipping.md`](../specs/shipping.md).
 - **O webhook de pagamento é rota do `orders`**, não do `payments`, mesmo
   servindo `/payments/webhook`. Reagir a um pagamento é mudar um
   **pedido**: hospedar o controller em `payments` faria `payments`
