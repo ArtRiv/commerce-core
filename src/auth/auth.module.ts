@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 
+import { MailModule } from '../mail/mail.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { PermissionsGuard } from './authz/permissions.guard';
@@ -38,6 +39,10 @@ const DEFAULT_ACCESS_TOKEN_TTL = '15m';
 /** Wires authentication + authorization globally, and issues tokens. */
 @Module({
   imports: [
+    // Explicit since MailModule stopped being @Global (docs/specs/order-emails.md):
+    // auth is no longer its only consumer, and the import is what keeps this
+    // dependency in the module graph rather than only in the diagram.
+    MailModule,
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
