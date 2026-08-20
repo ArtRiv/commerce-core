@@ -17,9 +17,9 @@ enum OrderStatus {
 }
 
 /// An immutable financial record born at checkout. Items freeze name and
-/// unit price; totalCents is the sum of the frozen subtotals. Catalog price
-/// changes after purchase never touch an existing order, and no endpoint
-/// edits order items.
+/// unit price, the chosen freight freezes beside them, and totalCents is what
+/// the customer actually pays. Catalog price changes after purchase never
+/// touch an existing order, and no endpoint edits order items.
 model Order {
   id     String      @id @default(uuid())
   userId String      @map("user_id")
@@ -27,6 +27,22 @@ model Order {
   status OrderStatus @default(CREATED)
 
   /// Sum of unitPriceCents × quantity over the items, frozen at checkout.
+  /// This is what totalCents meant before freight existed.
+  itemsSubtotalCents Int @map("items_subtotal_cents")
+
+  /// Freight, frozen at checkout. Zero is legitimate — a free-shipping
+  /// threshold or a promotion — and shippingMethodCode is what tells "free"
+  /// apart from an order created before this module existed.
+  shippingCents Int @map("shipping_cents")
+
+  /// THE AMOUNT CHARGED: itemsSubtotalCents + shippingCents, guaranteed by a
+  /// CHECK constraint in the migration.
+  ///
+  /// Redefining this column rather than adding a separate grand total is a
+  /// choice about failure modes. payments charges order.totalCents, so this
+  /// way the money path was correct the moment freight existed, and no future
+  /// reader — an email, a report, a partial refund — can undercharge by
+  /// forgetting to add a sibling column. See docs/specs/shipping.md.
   totalCents Int @map("total_cents")
 
   /// The provider's CHECKOUT SESSION reference (cs_... on Stripe). Written
@@ -58,12 +74,27 @@ model Order {
   refundedAt DateTime? @map("refunded_at")
 
   /// Shipping address snapshot taken at checkout — same philosophy as price.
-  /// No address book in v1; the ShippingProvider integration comes later.
+  /// No address book in v1. Only the postal code prices the freight; city and
+  /// state are here to print a label, not to quote.
   shippingLine1      String  @map("shipping_line1")
   shippingLine2      String? @map("shipping_line2")
   shippingCity       String  @map("shipping_city")
   shippingState      String  @map("shipping_state")
   shippingPostalCode String  @map("shipping_postal_code")
+
+  /// The chosen delivery method, frozen like the price and the address. A
+  /// bare "R$ 24,90" is not auditable and not displayable — the confirmation
+  /// email and the back office need the name and the promise that came with
+  /// it. Null only on orders created before this module existed.
+  shippingMethodCode String? @map("shipping_method_code")
+  shippingMethodName String? @map("shipping_method_name")
+  shippingEtaDays    Int?    @map("shipping_eta_days")
+
+  /// Optionally stamped on PAID → SHIPPED. Data, not state: no new lifecycle
+  /// status comes from this, and a local delivery with no tracking number is
+  /// still a legitimate shipment.
+  trackingCode String? @map("tracking_code")
+  trackingUrl  String? @map("tracking_url")
 
   paidAt      DateTime? @map("paid_at")
   shippedAt   DateTime? @map("shipped_at")

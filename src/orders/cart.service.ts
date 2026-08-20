@@ -16,6 +16,8 @@ export interface LiveProduct {
   priceCents: number;
   status: ProductStatus;
   stockQuantity: number;
+  /** Null until someone weighs it; shipping falls back to its own default. */
+  weightGrams: number | null;
 }
 
 export interface CartView {

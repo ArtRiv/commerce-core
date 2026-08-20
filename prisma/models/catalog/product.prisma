@@ -30,6 +30,16 @@ model Product {
 
   status ProductStatus @default(DRAFT)
 
+  /// Unit weight in grams, for freight quoting (docs/specs/shipping.md).
+  /// Optional because every product that existed before shipping was built
+  /// starts without one: refusing to sell until someone fills them in would
+  /// have taken the whole catalogue down. A missing weight falls back to
+  /// SHIPPING_DEFAULT_WEIGHT_GRAMS, which is a controlled lie — the store
+  /// eats the difference on a heavy product nobody weighed.
+  ///
+  /// No dimensions in v1; cubic weight is a deferred decision.
+  weightGrams Int? @map("weight_grams")
+
   /// Simple stock control: one count per product (no variants in v1).
   /// Never negative — decrements happen as a conditional UPDATE in
   /// StockService so a race for the last unit is settled by Postgres,

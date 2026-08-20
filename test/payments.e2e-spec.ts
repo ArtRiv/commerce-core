@@ -34,6 +34,8 @@ interface PaymentView {
 interface OrderResponse {
   id: string;
   status: OrderStatus;
+  itemsSubtotalCents: number;
+  shippingCents: number;
   totalCents: number;
   paymentRef: string | null;
   paymentUrl: string | null;
@@ -158,6 +160,29 @@ describe('Payments (e2e)', () => {
     return product;
   }
 
+  /**
+   * Freight for the caller's current cart. Checkout re-quotes and compares, so
+   * a payments test has to go through the same door a storefront does.
+   */
+  async function quotedShipping(
+    token: string,
+  ): Promise<{ shippingOptionCode: string; quotedShippingCents: number }> {
+    const response = await http()
+      .post('/shipping/quote')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ postalCode: ADDRESS.postalCode })
+      .expect(200);
+
+    const { options } = response.body as {
+      options: { code: string; priceCents: number }[];
+    };
+
+    return {
+      shippingOptionCode: options[0].code,
+      quotedShippingCents: options[0].priceCents,
+    };
+  }
+
   async function checkout(
     token = customerToken,
     body: Record<string, unknown> = {},
@@ -165,7 +190,11 @@ describe('Payments (e2e)', () => {
     const response = await http()
       .post('/orders')
       .set('Authorization', `Bearer ${token}`)
-      .send({ shippingAddress: ADDRESS, ...body })
+      .send({
+        shippingAddress: ADDRESS,
+        ...(await quotedShipping(token)),
+        ...body,
+      })
       .expect(201);
 
     return response.body as OrderResponse;
@@ -301,10 +330,16 @@ describe('Payments (e2e)', () => {
     it('rejects a checkout mode that is not a mode', async () => {
       await fillCart();
 
+      // Everything else valid on purpose, so the 400 can only be about the
+      // mode rather than about the freight fields being absent.
       await http()
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
-        .send({ shippingAddress: ADDRESS, paymentMode: 'carrier-pigeon' })
+        .send({
+          shippingAddress: ADDRESS,
+          ...(await quotedShipping(customerToken)),
+          paymentMode: 'carrier-pigeon',
+        })
         .expect(400);
     });
 

@@ -17,6 +17,8 @@ export interface CreateProductInput {
   imageUrls?: string[];
   status?: ProductStatus;
   stockQuantity?: number;
+  /** Grams, for freight quoting. Null/absent falls back to the configured default. */
+  weightGrams?: number | null;
   categoryIds?: string[];
 }
 
@@ -73,6 +75,7 @@ export class ProductsService {
         imageUrls: input.imageUrls ?? [],
         status: input.status,
         stockQuantity: input.stockQuantity,
+        weightGrams: input.weightGrams,
         categories: this.categoryLinks(input.categoryIds),
       },
       include: CATEGORY_INCLUDE,
@@ -165,6 +168,9 @@ export class ProductsService {
         priceCents: true,
         status: true,
         stockQuantity: true,
+        // Freight needs it, and orders resolves it through this contract
+        // rather than reading the products table (docs/specs/shipping.md).
+        weightGrams: true,
       },
     });
   }
@@ -192,6 +198,7 @@ export class ProductsService {
         imageUrls: input.imageUrls,
         status: input.status,
         stockQuantity: input.stockQuantity,
+        weightGrams: input.weightGrams,
         // Absent means "not touching categories"; present means the sent list
         // IS the new truth — clear and rebuild in one nested write.
         categories: input.categoryIds

@@ -1,6 +1,7 @@
 /**
- * Rate limits for the two order routes that reach the payment provider, from
- * docs/specs/payments.md. Same reasoning as auth's rate-limits.ts: the numbers
+ * Rate limits for the order routes that reach an outside provider — payments
+ * today, a carrier tomorrow — from docs/specs/payments.md and
+ * docs/specs/shipping.md. Same reasoning as auth's rate-limits.ts: the numbers
  * live together so they can be compared against each other and the spec.
  */
 
@@ -25,4 +26,17 @@ export const RATE_LIMITS = {
    * with backoff for days — refusing an event postpones it rather than losing it.
    */
   PAYMENT_WEBHOOK: { limit: 300, ttl: MINUTE },
+
+  /**
+   * Quoting is cheap arithmetic while the table provider is the one behind the
+   * token, and this limit is not really for today: the same interface will
+   * hold a carrier, where every quote is a network round trip billed against
+   * someone else's quota.
+   *
+   * Higher than the payment limit because quoting is a browsing action — a
+   * customer legitimately tries several postal codes, and a storefront may
+   * re-quote as the cart changes — and lower than the webhook's, because
+   * unlike a webhook a rejected quote has no one to retry it.
+   */
+  SHIPPING_QUOTE: { limit: 30, ttl: MINUTE },
 } as const;

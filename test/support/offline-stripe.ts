@@ -2,6 +2,13 @@ import Stripe from 'stripe';
 
 interface StoredSession {
   id: string;
+  /**
+   * What the session was created to charge. The real Stripe derives this from
+   * the line items; this double keeps it because "how much would this actually
+   * have charged" is the question the shipping suite has to answer, and a
+   * double that forgets the amount cannot answer it.
+   */
+  amount_total: number;
   url: string | null;
   client_secret: string | null;
   status: 'open' | 'complete' | 'expired';
@@ -70,6 +77,7 @@ export class OfflineStripe {
 
         const session: StoredSession = {
           id,
+          amount_total: params.line_items[0].price_data.unit_amount,
           url: embedded ? null : `https://checkout.stripe.test/${id}`,
           client_secret: embedded ? `${id}_secret` : null,
           status: 'open',

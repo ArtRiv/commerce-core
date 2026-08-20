@@ -60,6 +60,16 @@ export class UpdateProductDto {
   @Min(0)
   stockQuantity?: number;
 
+  /**
+   * Unit weight in grams, for freight quoting. Optional: a product without one
+   * is quoted at SHIPPING_DEFAULT_WEIGHT_GRAMS, which the store pays for if the
+   * guess is low — so it is worth filling in.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  weightGrams?: number;
+
   /** Absent = leave categories alone. Present = the full new set. */
   @IsOptional()
   @IsArray()
