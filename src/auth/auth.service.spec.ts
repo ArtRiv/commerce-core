@@ -7,6 +7,7 @@ import {
 import type { JwtService } from '@nestjs/jwt';
 
 import { VerificationTokenPurpose } from '../generated/prisma/enums';
+import type { MailService } from '../mail/mail.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
 import type { PasswordService } from './password.service';
@@ -126,7 +127,9 @@ function createMocks() {
     refreshTokens as unknown as RefreshTokenService,
     verificationTokens as unknown as VerificationTokenService,
     jwt as unknown as JwtService,
-    mail,
+    // Only the two methods auth uses are stubbed; the order emails are not
+    // this module's business, and a cast keeps them out of every auth test.
+    mail as unknown as MailService,
   );
 
   return {

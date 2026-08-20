@@ -2,7 +2,18 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 
-import type { MailService } from './mail.service';
+import type {
+  MailService,
+  OrderEmailData,
+  OrderShippedEmailData,
+} from './mail.service';
+import {
+  orderCancelledEmail,
+  orderPaidEmail,
+  orderRefundedEmail,
+  orderShippedEmail,
+  type RenderedEmail,
+} from './order-email-templates';
 
 @Injectable()
 export class ResendMailService implements MailService {
@@ -49,8 +60,46 @@ export class ResendMailService implements MailService {
     });
   }
 
+  /**
+   * The four order emails are one line each: the templates are pure functions
+   * (src/mail/order-email-templates.ts), so every rendering rule — the freight
+   * breakdown, the legacy order with no freight to name, optional tracking,
+   * HTML escaping — is unit-tested without a Resend key in sight. What is left
+   * here is the part that genuinely needs the provider.
+   */
+  sendOrderPaidEmail(to: string, data: OrderEmailData): Promise<void> {
+    return this.sendRendered(to, orderPaidEmail(data, this.orderUrl(data)));
+  }
+
+  sendOrderShippedEmail(
+    to: string,
+    data: OrderShippedEmailData,
+  ): Promise<void> {
+    return this.sendRendered(to, orderShippedEmail(data, this.orderUrl(data)));
+  }
+
+  sendOrderRefundedEmail(to: string, data: OrderEmailData): Promise<void> {
+    return this.sendRendered(to, orderRefundedEmail(data, this.orderUrl(data)));
+  }
+
+  sendOrderCancelledEmail(to: string, data: OrderEmailData): Promise<void> {
+    return this.sendRendered(
+      to,
+      orderCancelledEmail(data, this.orderUrl(data)),
+    );
+  }
+
+  private sendRendered(to: string, rendered: RenderedEmail): Promise<void> {
+    return this.send({ to, ...rendered });
+  }
+
   private link(path: string, token: string): string {
     return `${this.appUrl}${path}?token=${encodeURIComponent(token)}`;
+  }
+
+  /** The order page on the FRONTEND, same reasoning as the auth links above. */
+  private orderUrl(data: OrderEmailData): string {
+    return `${this.appUrl}/orders/${encodeURIComponent(data.orderId)}`;
   }
 
   private async send(message: {
