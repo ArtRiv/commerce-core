@@ -21,6 +21,7 @@ import {
   type PaymentSession,
 } from '../payments/payment-provider';
 import { PrismaService } from '../prisma/prisma.service';
+import { OrderNotificationsService } from './order-notifications.service';
 import {
   itemsSubtotalCents,
   ShippingQuoteService,
@@ -125,6 +126,11 @@ export class OrdersService {
     private readonly stock: StockService,
     @Inject(PAYMENT_PROVIDER) private readonly payments: PaymentProvider,
     private readonly shipping: ShippingQuoteService,
+    // Awaited, not fired and forgotten: it swallows its own failures by
+    // contract (see OrderNotificationsService), so awaiting costs a little
+    // latency and buys an ordered, observable send instead of a floating
+    // promise that rejects after the response has gone out.
+    private readonly notifications: OrderNotificationsService,
   ) {}
 
   async checkout(userId: string, input: CheckoutInput) {
@@ -441,6 +447,14 @@ export class OrdersService {
       await this.expireQuietly(order.paymentRef);
     }
 
+    // Only when someone ELSE cancelled it. A customer who just clicked cancel
+    // is reading the 200 for that very request; mailing them about it is
+    // telling someone what they just did. An operator cancelling a stranger's
+    // order is the one case the customer could not have known about.
+    if (order.userId !== user.id) {
+      await this.notifications.orderCancelled(id);
+    }
+
     return this.getById(id);
   }
 
@@ -493,6 +507,8 @@ export class OrdersService {
       );
     }
 
+    await this.notifications.orderRefunded(id);
+
     return this.getById(id);
   }
 
@@ -503,8 +519,17 @@ export class OrdersService {
    * Returns whether it applied, rather than throwing, because "already
    * refunded" is a normal thing for a redelivered event to find.
    */
-  markRefunded(id: string, refundRef: string | null): Promise<boolean> {
-    return this.applyRefund(id, refundRef);
+  async markRefunded(id: string, refundRef: string | null): Promise<boolean> {
+    const applied = await this.applyRefund(id, refundRef);
+
+    // Only on a real transition. A charge.refunded arriving after the /refund
+    // route already did the work finds PAID gone, gets false, and sends
+    // nothing — one refund, one email.
+    if (applied) {
+      await this.notifications.orderRefunded(id);
+    }
+
+    return applied;
   }
 
   /**
@@ -512,14 +537,22 @@ export class OrdersService {
    * record a manual payment, and the Stripe webhook calls the same method.
    * Orders' lifecycle does not change when the real provider arrives.
    */
-  markPaid(id: string, paymentIntentRef?: string) {
-    return this.transition(
+  async markPaid(id: string, paymentIntentRef?: string) {
+    const order = await this.transition(
       id,
       OrderStatus.CREATED,
       OrderStatus.PAID,
       'paidAt',
       paymentIntentRef ? { paymentIntentRef } : {},
     );
+
+    // Reached only because the conditional UPDATE above changed a row, which
+    // is the whole idempotency story (docs/specs/order-emails.md): a webhook
+    // redelivery that gets past payment_events throws out of transition() and
+    // never arrives here, so the buyer is thanked exactly once.
+    await this.notifications.orderPaid(id);
+
+    return order;
   }
 
   /**
@@ -529,8 +562,8 @@ export class OrdersService {
    * shipment with no code — a courier, a local hand-off — is still a
    * shipment, so an absent code leaves the columns null rather than blocking.
    */
-  ship(id: string, tracking: OrderTracking = {}) {
-    return this.transition(
+  async ship(id: string, tracking: OrderTracking = {}) {
+    const order = await this.transition(
       id,
       OrderStatus.PAID,
       OrderStatus.SHIPPED,
@@ -542,6 +575,12 @@ export class OrdersService {
         ...(tracking.trackingUrl ? { trackingUrl: tracking.trackingUrl } : {}),
       },
     );
+
+    // After the write, so the email reads the tracking details this call just
+    // stamped rather than the arguments it was handed.
+    await this.notifications.orderShipped(id);
+
+    return order;
   }
 
   deliver(id: string) {

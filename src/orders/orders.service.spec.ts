@@ -21,6 +21,7 @@ import type {
   ShippingQuoteRequest,
 } from '../shipping/shipping-provider';
 import type { CartService } from './cart.service';
+import type { OrderNotificationsService } from './order-notifications.service';
 import {
   type CheckoutInput,
   OrdersService,
@@ -220,11 +221,34 @@ function createShippingProviderMock() {
   };
 }
 
+/**
+ * The mail side of a transition, doubled at the module's own seam.
+ *
+ * OrderNotificationsService guarantees it never rejects, so these tests are
+ * about WHEN it is called, not what it sends — the payload it builds and the
+ * outage it swallows are its own spec's business.
+ */
+function createNotificationsMock() {
+  return {
+    orderPaid: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
+    orderShipped: jest
+      .fn<Promise<void>, [string]>()
+      .mockResolvedValue(undefined),
+    orderRefunded: jest
+      .fn<Promise<void>, [string]>()
+      .mockResolvedValue(undefined),
+    orderCancelled: jest
+      .fn<Promise<void>, [string]>()
+      .mockResolvedValue(undefined),
+  };
+}
+
 type PrismaMock = ReturnType<typeof createPrismaMock>;
 type ProductsMock = ReturnType<typeof createProductsMock>;
 type StockMock = ReturnType<typeof createStockMock>;
 type PaymentsMock = ReturnType<typeof createPaymentsMock>;
 type ShippingMock = ReturnType<typeof createShippingProviderMock>;
+type NotificationsMock = ReturnType<typeof createNotificationsMock>;
 
 interface Mocks {
   prisma: PrismaMock;
@@ -232,6 +256,7 @@ interface Mocks {
   stock: StockMock;
   payments: PaymentsMock;
   shipping: ShippingMock;
+  notifications: NotificationsMock;
 }
 
 function createMocks(): Mocks {
@@ -241,10 +266,18 @@ function createMocks(): Mocks {
     stock: createStockMock(),
     payments: createPaymentsMock(),
     shipping: createShippingProviderMock(),
+    notifications: createNotificationsMock(),
   };
 }
 
-function serviceWith({ prisma, products, stock, payments, shipping }: Mocks) {
+function serviceWith({
+  prisma,
+  products,
+  stock,
+  payments,
+  shipping,
+  notifications,
+}: Mocks) {
   return new OrdersService(
     prisma as unknown as PrismaService,
     products as unknown as ProductsService,
@@ -256,6 +289,7 @@ function serviceWith({ prisma, products, stock, payments, shipping }: Mocks) {
       shipping,
       DEFAULT_WEIGHT_GRAMS,
     ),
+    notifications as unknown as OrderNotificationsService,
   );
 }
 
@@ -1283,6 +1317,194 @@ describe('OrdersService', () => {
       ];
       expect(args.data).not.toHaveProperty('trackingCode');
       expect(args.data).not.toHaveProperty('trackingUrl');
+    });
+  });
+
+  /**
+   * The idempotency claim of docs/specs/order-emails.md, at the only level
+   * where it is true: every transition is a conditional UPDATE, so "a row
+   * changed" is the same thing as "this happened just now, on this call".
+   * Emails hang off that answer and nothing else — no table, no dedupe key.
+   */
+  describe('lifecycle emails', () => {
+    /** Zero rows updated, and the order still exists — a losing transition. */
+    function primeLostRace(mocks: Mocks, status: OrderStatus) {
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+      mocks.prisma.order.findUnique.mockResolvedValue(orderRow({ status }));
+    }
+
+    describe('on payment', () => {
+      it('confirms the order once it really moved to PAID', async () => {
+        const mocks = createMocks();
+
+        await serviceWith(mocks).markPaid('order-1', 'pi_1');
+
+        expect(mocks.notifications.orderPaid).toHaveBeenCalledWith('order-1');
+      });
+
+      it('sends nothing when the order was already PAID', async () => {
+        const mocks = createMocks();
+        primeLostRace(mocks, OrderStatus.PAID);
+
+        // The webhook redelivery path: payment_events stops most of these
+        // upstream, and the ones that get through land here as a 409.
+        await expect(serviceWith(mocks).markPaid('order-1')).rejects.toThrow(
+          ConflictException,
+        );
+        expect(mocks.notifications.orderPaid).not.toHaveBeenCalled();
+      });
+
+      it('sends nothing when there is no such order', async () => {
+        const mocks = createMocks();
+        mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+        mocks.prisma.order.findUnique.mockResolvedValue(null);
+
+        await expect(serviceWith(mocks).markPaid('order-1')).rejects.toThrow(
+          NotFoundException,
+        );
+        expect(mocks.notifications.orderPaid).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('on shipment', () => {
+      it('announces the shipment once it really moved to SHIPPED', async () => {
+        const mocks = createMocks();
+
+        await serviceWith(mocks).ship('order-1', {
+          trackingCode: 'BR123456789BR',
+        });
+
+        expect(mocks.notifications.orderShipped).toHaveBeenCalledWith(
+          'order-1',
+        );
+      });
+
+      it('sends nothing on a second ship of the same order', async () => {
+        const mocks = createMocks();
+        primeLostRace(mocks, OrderStatus.SHIPPED);
+
+        await expect(serviceWith(mocks).ship('order-1')).rejects.toThrow(
+          ConflictException,
+        );
+        expect(mocks.notifications.orderShipped).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('on delivery', () => {
+      it('sends nothing at all', async () => {
+        const mocks = createMocks();
+
+        await serviceWith(mocks).deliver('order-1');
+
+        // Deliberate, not an oversight (docs/specs/order-emails.md): the box
+        // is already in the customer's hands by then.
+        expect(mocks.notifications.orderPaid).not.toHaveBeenCalled();
+        expect(mocks.notifications.orderShipped).not.toHaveBeenCalled();
+        expect(mocks.notifications.orderRefunded).not.toHaveBeenCalled();
+        expect(mocks.notifications.orderCancelled).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('on refund', () => {
+      function primeRefundable(mocks: Mocks) {
+        mocks.prisma.order.findUnique.mockResolvedValue(
+          orderRow({ status: OrderStatus.PAID, paymentIntentRef: 'pi_1' }),
+        );
+      }
+
+      it('tells the customer their money is on the way back', async () => {
+        const mocks = createMocks();
+        primeRefundable(mocks);
+
+        await serviceWith(mocks).refund('order-1');
+
+        expect(mocks.notifications.orderRefunded).toHaveBeenCalledWith(
+          'order-1',
+        );
+      });
+
+      it('sends nothing when the refund did not apply', async () => {
+        const logger = muteLogger();
+        const mocks = createMocks();
+        primeRefundable(mocks);
+        mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(serviceWith(mocks).refund('order-1')).rejects.toThrow(
+          ConflictException,
+        );
+        expect(mocks.notifications.orderRefunded).not.toHaveBeenCalled();
+        expect(logger.error).toHaveBeenCalled();
+      });
+
+      it('sends from the webhook seam too, when it applies', async () => {
+        const mocks = createMocks();
+
+        await expect(
+          serviceWith(mocks).markRefunded('order-1', 're_1'),
+        ).resolves.toBe(true);
+        expect(mocks.notifications.orderRefunded).toHaveBeenCalledWith(
+          'order-1',
+        );
+      });
+
+      it('stays quiet when the webhook finds the order already refunded', async () => {
+        const mocks = createMocks();
+        mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+        // charge.refunded arriving after POST /orders/:id/refund already did
+        // the work — one refund, one email.
+        await expect(
+          serviceWith(mocks).markRefunded('order-1', 're_1'),
+        ).resolves.toBe(false);
+        expect(mocks.notifications.orderRefunded).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('on cancellation', () => {
+      function primeCancellable(mocks: Mocks, userId = 'user-1') {
+        mocks.prisma.order.findFirst.mockResolvedValue(orderRow({ userId }));
+        mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      }
+
+      it('stays quiet when customers cancel their own order', async () => {
+        const mocks = createMocks();
+        primeCancellable(mocks);
+
+        await serviceWith(mocks).cancel(userWith(), 'order-1');
+
+        // They clicked the button and got a 200 — mailing them about it is
+        // telling someone what they just did.
+        expect(mocks.notifications.orderCancelled).not.toHaveBeenCalled();
+      });
+
+      it('warns the customer when someone else cancels their order', async () => {
+        const mocks = createMocks();
+        primeCancellable(mocks, 'someone-else');
+
+        await serviceWith(mocks).cancel(
+          userWith([PERMISSIONS.ORDERS_CANCEL]),
+          'order-1',
+        );
+
+        // This is the only case the customer could not have known about.
+        expect(mocks.notifications.orderCancelled).toHaveBeenCalledWith(
+          'order-1',
+        );
+      });
+
+      it('sends nothing when the cancellation lost the race', async () => {
+        const mocks = createMocks();
+        primeCancellable(mocks, 'someone-else');
+        mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(
+          serviceWith(mocks).cancel(
+            userWith([PERMISSIONS.ORDERS_CANCEL]),
+            'order-1',
+          ),
+        ).rejects.toThrow(ConflictException);
+        expect(mocks.notifications.orderCancelled).not.toHaveBeenCalled();
+      });
     });
   });
 });
