@@ -24,8 +24,9 @@ o teste:
    e é assim que ele é testado.
 
 Verificado: migration aplicada (as oito colunas e os quatro `CHECK`
-existem no banco), 334 unitários, 19 e2e deste módulo, e as suítes vizinhas
-que este PR mexeu continuam verdes — `orders` 23/23 e `payments` 29/29.
+existem no banco), 334 unitários, e a suíte e2e inteira verde — 144 testes,
+sete arquivos, incluindo os 19 deste módulo e as suítes que este PR mexeu
+por tabela (`orders`, `payments`) ou por DTO (`catalog`).
 
 Um detalhe de teste que a primeira execução expôs: o e2e do rate limit
 gasta o orçamento com requisições que o `ValidationPipe` recusa. Guard roda
