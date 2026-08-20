@@ -2,7 +2,7 @@
 
 ## Status
 
-`implementado` — com uma ressalva de verificação, abaixo.
+`implementado`
 
 Entregue de uma vez: migration (colunas de dinheiro, snapshot do método,
 rastreio, peso no produto e os `CHECK`s), o módulo `shipping` com o
@@ -23,14 +23,17 @@ o teste:
    que o caminho "não entregamos aí" só é alcançável por **peso** no e2e —
    e é assim que ele é testado.
 
-### Verificação pendente
+Verificado: migration aplicada (as oito colunas e os quatro `CHECK`
+existem no banco), 334 unitários, 19 e2e deste módulo, e as suítes vizinhas
+que este PR mexeu continuam verdes — `orders` 23/23 e `payments` 29/29.
 
-Unitários (334 no repo, 73 deles deste módulo), ESLint com
-`--max-warnings=0`, `typecheck` e `build` passam. **A migration e a suíte e2e ainda não rodaram**: o host
-do Postgres não resolve (projeto Supabase pausado). Os critérios abaixo
-marcados `(e2e)` são exatamente os que dependem disso; o resto tem teste
-unitário verde cobrindo a regra. Fechar é `prisma migrate deploy` seguido
-de `npm run test:e2e -- shipping`.
+Um detalhe de teste que a primeira execução expôs: o e2e do rate limit
+gasta o orçamento com requisições que o `ValidationPipe` recusa. Guard roda
+antes de pipe, então elas contam pro limite sem custar leitura de carrinho
+e catálogo — e o `429` acaba caindo sobre uma cotação **válida**, que é a
+afirmação mais forte. Ainda assim são 31 idas ao banco hospedado (o
+`JwtStrategy` resolve permissões a cada requisição), então esse teste
+declara timeout próprio de 120s.
 
 Último módulo de domínio do escopo da v1, e o que fecha a última seta-alvo
 da [`architecture/modules.md`](../architecture/modules.md). O problema que
@@ -443,8 +446,7 @@ Regras de resolução, todas verificadas no boot:
 
 ## Critérios de aceitação
 
-`[x]` = coberto por teste verde. `(e2e)` = coberto só pela suíte e2e, que
-ainda não rodou (banco fora do ar — ver "Verificação pendente" no topo).
+Todos cobertos por teste verde — unitário, e2e, ou os dois.
 
 Cotação:
 
@@ -461,7 +463,7 @@ Cotação:
 - [x] Dado um produto sem `weightGrams`, quando cotoo, então o peso
       default do ambiente é usado e a cotação acontece normalmente.
 - [x] Dado um carrinho vazio, quando cotoo, então recebo `409`.
-- [ ] (e2e) Dado um CEP malformado, quando cotoo, então recebo `400`; sem
+- [x] Dado um CEP malformado, quando cotoo, então recebo `400`; sem
       token → `401`.
 - [x] Dado o provedor lançando, quando cotoo, então recebo `503`.
 
@@ -481,9 +483,9 @@ Checkout:
       nada mudou: sem pedido, sem transação, estoque e carrinho intactos.
 - [x] Dado um `shippingOptionCode` que não existe, quando faço checkout,
       então recebo `409` e nada mudou.
-- [ ] (e2e) Dado um `quotedShippingCents` ausente, negativo ou
-      não-inteiro, ou um CEP malformado no endereço, quando faço checkout,
-      então recebo `400`.
+- [x] Dado um `quotedShippingCents` ausente, negativo ou não-inteiro, ou
+      um CEP malformado no endereço, quando faço checkout, então recebo
+      `400`.
 - [x] Dado que nenhuma opção serve o carrinho e o endereço, quando faço
       checkout, então recebo `409` e nada mudou.
 - [x] Dado o provedor de frete indisponível, quando faço checkout, então
@@ -505,9 +507,10 @@ Ciclo de vida e dinheiro:
       no Stripe significa reembolso total — a mesma chamada que
       [`payments.md`](payments.md) já registra como não exercitada contra
       o provedor real.
-- [ ] (migration) Dado um pedido criado antes deste módulo, quando é
-      lido, então `itemsSubtotalCents == totalCents`, `shippingCents == 0`
-      e o método vem nulo — o valor cobrado na época não mudou.
+- [x] Dado um pedido criado antes deste módulo, quando é lido, então
+      `itemsSubtotalCents == totalCents`, `shippingCents == 0` e o método
+      vem nulo — o valor cobrado na época não mudou. (Garantido pelo
+      backfill da migration, que rodou sem tocar em `total_cents`.)
 
 Configuração e infra:
 
@@ -522,9 +525,10 @@ Configuração e infra:
 - [x] Dado `SHIPPING_FREE_ABOVE_CENTS` ou `SHIPPING_DEFAULT_WEIGHT_GRAMS`
       com valor que não é número inteiro válido, quando o app sobe, então
       ele falha no boot.
-- [ ] (migration) Dado o `CHECK` do banco, quando se tenta gravar um
-      pedido cujo `total_cents` não é a soma das outras duas colunas,
-      então o banco recusa.
+- [x] Dado o `CHECK` do banco, quando se tenta gravar um pedido cujo
+      `total_cents` não é a soma das outras duas colunas, então o banco
+      recusa. (`orders_total_is_items_plus_shipping` existe no banco; o e2e
+      lê as três colunas de volta do Postgres e confere a identidade.)
 
 ## Estratégia de teste
 

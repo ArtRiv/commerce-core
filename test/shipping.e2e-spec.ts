@@ -486,20 +486,24 @@ describe('Shipping (e2e)', () => {
   describe('rate limiting', () => {
     it('429s past the quote budget', async () => {
       await fillCart();
-      let last = 0;
 
-      for (let i = 0; i < RATE_LIMITS.SHIPPING_QUOTE.limit + 1; i += 1) {
-        last = (
-          await http()
-            .post('/shipping/quote')
-            .set('Authorization', `Bearer ${customerToken}`)
-            .send({ postalCode: ADDRESS.postalCode })
-        ).status;
+      // The budget is spent on requests that never reach the handler: guards
+      // run ahead of pipes, so a body the ValidationPipe rejects still counts
+      // against the limit while skipping the cart and catalog reads. Thirty
+      // cheap round trips instead of thirty full quotes — and the assertion
+      // that follows is the stronger one, because what gets refused is a
+      // perfectly valid request, purely for being over budget.
+      for (let i = 0; i < RATE_LIMITS.SHIPPING_QUOTE.limit; i += 1) {
+        await http()
+          .post('/shipping/quote')
+          .set('Authorization', `Bearer ${customerToken}`)
+          .send({})
+          .expect(400);
       }
 
       // The guard is wired, not merely declared — drop @UseGuards from the
       // controller and this is the assertion that fails.
-      expect(last).toBe(429);
-    });
+      await quote(ADDRESS.postalCode, customerToken, 429);
+    }, 120_000); // a hosted database, do not fit the suite's default 30s. // Thirty-one authenticated round trips, each resolving permissions from
   });
 });
