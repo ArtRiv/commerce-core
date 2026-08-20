@@ -2,7 +2,7 @@
 
 > Status: real, inteiro. `auth`, `catalog`, `orders`, `payments` (Stripe
 > de verdade), `shipping` (tabela de frete por faixa de CEP), `prisma` e
-> `mail` existem, e as três setas que saem de `orders` são código. Se um
+> `mail` existem, e as quatro setas que saem de `orders` são código. Se um
 > módulo passar a depender de outro de um jeito não previsto aqui, o
 > diagrama está desatualizado, não o código.
 
@@ -24,6 +24,7 @@ flowchart LR
     orders --> catalog
     orders --> payments
     orders --> shipping
+    orders --> mail
 
     auth --> prisma
     auth --> mail
@@ -39,8 +40,10 @@ flowchart LR
 ## Regras de dependência
 
 - `orders` é o orquestrador: conhece `catalog` (checar produto/estoque),
-  `payments` (cobrar) e `shipping` (calcular frete). Nenhum desses três
-  conhece `orders` de volta. O contrato do lado de `catalog`
+  `payments` (cobrar), `shipping` (calcular frete) e `mail` (avisar o
+  cliente do que aconteceu com o pedido). Nenhum desses quatro conhece
+  `orders` de volta — o que cruza a fronteira do `mail` é um view model do
+  próprio `mail` (`OrderEmailData`), montado aqui. O contrato do lado de `catalog`
   está em uso: `CatalogModule` exporta `ProductsService` (`findByIds`,
   a leitura em lote do que está sendo comprado, e por onde o peso do
   produto chega ao frete) e `StockService`
@@ -63,7 +66,15 @@ flowchart LR
 - `mail` é infraestrutura também: expõe uma interface (`MailService`) via
   token, com o adapter do Resend escondido atrás — mesmo padrão de
   `payments`/`shipping`. `auth` depende dela pra verificação de e-mail e
-  reset de senha. Trocar de provedor é mudança só no módulo `mail`.
+  reset de senha; `orders` pros e-mails do ciclo de vida do pedido
+  (`docs/specs/order-emails.md`). Trocar de provedor é mudança só no
+  módulo `mail`.
+
+  **Deixou de ser `@Global`** quando ganhou o segundo consumidor, adotando
+  o mesmo argumento que `payments` e `shipping` fazem logo abaixo:
+  importar o módulo é o que mantém a dependência visível no grafo. Enquanto
+  só o `auth` usava, a invisibilidade era barata; com `orders` entrando,
+  este diagrama estaria desenhando duas setas que nenhum código sustentava.
 - `common` é via de mão única: qualquer módulo pode usar filtros/pipes/
   decorators de `common`, mas `common` nunca importa de um módulo de
   domínio.

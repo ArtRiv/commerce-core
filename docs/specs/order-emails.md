@@ -2,7 +2,50 @@
 
 ## Status
 
-`in-progress`
+`implementado` — com uma ressalva de verificação, abaixo.
+
+Entregue de uma vez: o contrato do `MailService` crescendo com quatro
+métodos semânticos, templates puros com escape de HTML e formatação BRL,
+o `OrderNotificationsService` no `orders`, o disparo colado em cada
+transição, o `MailModule` deixando de ser `@Global` e o mapa de módulos
+ganhando a seta `orders --> mail`. Nenhuma migration: a idempotência não
+precisou de tabela, então não há RLS nova pra verificar no security
+advisor — pela primeira vez num módulo deste projeto.
+
+Uma coisa mudou durante a implementação, e veio de escrever o teste: o
+`OrderNotificationsService` **não** recebe o pedido já carregado pelo
+`OrdersService`, faz a própria leitura. Passar o objeto economizaria um
+`SELECT`, mas o objeto que o `OrdersService` tem não carrega o usuário —
+e alargar o `ITEMS_INCLUDE` pra incluí-lo colocaria o e-mail do cliente
+no corpo de toda resposta de `GET /orders`, inclusive na listagem que um
+operador faz dos pedidos de todo mundo. Um `SELECT` a mais num caminho
+raro é mais barato que isso.
+
+### Verificado
+
+- **395 testes unitários verdes** (eram 334 antes deste módulo: +61),
+  `tsc --noEmit` limpo e `eslint --max-warnings=0` limpo.
+- **A suíte e2e (`test/order-emails.e2e-spec.ts`, 17 casos) foi escrita
+  mas NÃO foi executada**: o banco de desenvolvimento estava inacessível
+  da máquina onde este módulo foi implementado. O host direto do Supabase
+  (`db.<ref>.supabase.co`) resolve só para IPv6, e a máquina estava com
+  IPv6 desabilitado por uma VPN só-IPv4 — `P1001` em qualquer comando do
+  Prisma, inclusive `migrate status`, antes de qualquer código deste
+  módulo rodar. Os critérios que dependem só do e2e estão marcados abaixo
+  como pendentes, e a suíte inteira (144 casos + estes 17) precisa rodar
+  antes do merge.
+
+### Buracos de cobertura conhecidos
+
+- O `ResendMailService` continua sem teste, mesma postura do `auth`: o
+  que ele faz agora é uma linha por método (chamar o template e passar
+  pro `send` que já existia). Toda a lógica que valia testar — a quebra do
+  dinheiro, o pedido sem frete, o rastreio opcional, o escape — saiu de
+  dentro dele pra funções puras em `order-email-templates.ts`,
+  justamente pra ficar coberta sem uma chave do Resend.
+- O e-mail é o **último** efeito de cada transição, e nada o reenvia:
+  crash entre o commit e o envio perde a mensagem. É a consequência
+  aceita de não ter fila na v1 (ver "decisões adiadas"), não um descuido.
 
 Decisões alinhadas antes desta spec, todas registradas aqui porque
 nenhuma delas é óbvia a partir do código: quais eventos merecem e-mail,
@@ -203,51 +246,57 @@ interface MailService {
 
 Disparo:
 
-- [ ] Dado um pedido `CREATED`, quando um operator chama `mark-paid`,
+Marcação: `[x]` = coberto por teste **passando**; `[ ]` = coberto só pelo
+e2e que ainda não foi executado (ver "Verificado" acima).
+
+- [x] Dado um pedido `CREATED`, quando um operator chama `mark-paid`,
       então o cliente recebe o e-mail de confirmação no endereço da
       conta dele.
 - [ ] Dado um pedido `CREATED` com sessão de pagamento, quando o webhook
       `payment.succeeded` chega, então o mesmo e-mail é enviado — e
       quando o **mesmo evento** é reentregue, nenhum segundo e-mail sai.
-- [ ] Dado um pedido `PAID`, quando `ship` é chamado, então sai o e-mail
+      (A metade de baixo — o `409` do `markPaid` numa segunda tentativa —
+      é unitária e passa; a cadeia webhook → e-mail é e2e.)
+- [x] Dado um pedido `PAID`, quando `ship` é chamado, então sai o e-mail
       de envio; chamar `ship` de novo → `409` e nenhum e-mail novo.
-- [ ] Dado um pedido `PAID`, quando `refund` é chamado, então sai o
+- [x] Dado um pedido `PAID`, quando `refund` é chamado, então sai o
       e-mail de reembolso; quando o `charge.refunded` do provedor chega
       depois, nenhum segundo e-mail sai.
-- [ ] Dado um pedido `CREATED` de um cliente, quando um **admin**
+- [x] Dado um pedido `CREATED` de um cliente, quando um **admin**
       cancela, então o cliente é avisado por e-mail; quando o **próprio
       cliente** cancela, nenhum e-mail é enviado.
-- [ ] Dado um pedido `SHIPPED`, quando `deliver` é chamado, então
+- [x] Dado um pedido `SHIPPED`, quando `deliver` é chamado, então
       nenhum e-mail é enviado (fora de escopo, e a ausência é
       deliberada).
 
 Resiliência:
 
-- [ ] Dado um provedor de e-mail fora do ar, quando o pedido é marcado
+- [x] Dado um provedor de e-mail fora do ar, quando o pedido é marcado
       como pago, então a transição acontece normalmente (`200`, pedido
       `PAID`) e a falha é só logada — a operação nunca falha por causa do
-      e-mail.
+      e-mail. (Unitário: o serviço de notificação nunca rejeita, e o log
+      não carrega o endereço do cliente. O `200` de ponta a ponta é e2e.)
 - [ ] Dado um provedor de e-mail fora do ar, quando o webhook do Stripe
       entrega `payment.succeeded`, então a resposta é `200` (nada de
       reentrega em massa por causa do Resend) e o pedido está `PAID`.
 
 Conteúdo:
 
-- [ ] Dado um pedido com frete cobrado, quando o e-mail de confirmação é
+- [x] Dado um pedido com frete cobrado, quando o e-mail de confirmação é
       montado, então ele carrega subtotal dos itens, frete, nome do
       método e total — e o total é igual a subtotal + frete.
-- [ ] Dado um pedido com `shippingMethodCode` nulo (anterior ao frete),
+- [x] Dado um pedido com `shippingMethodCode` nulo (anterior ao frete),
       quando o e-mail é montado, então não há bloco de frete nem
       subtotal: só o total, e em lugar nenhum aparece `null` ou
       "R$ 0,00" de frete.
-- [ ] Dado um pedido com frete grátis (método preenchido, zero centavos),
+- [x] Dado um pedido com frete grátis (método preenchido, zero centavos),
       quando o e-mail é montado, então aparece "grátis" com o nome do
       método — diferente do caso anterior.
-- [ ] Dado um envio com código e URL de rastreio, então o e-mail traz o
+- [x] Dado um envio com código e URL de rastreio, então o e-mail traz o
       código como link; com só o código, traz o código em texto; sem
       nenhum dos dois, o e-mail continua fazendo sentido e não imprime
       rótulo de rastreio vazio.
-- [ ] Dado um produto com `<script>` no nome, quando o e-mail é montado,
+- [x] Dado um produto com `<script>` no nome, quando o e-mail é montado,
       então o HTML sai escapado.
 
 ## Edge cases conhecidos
