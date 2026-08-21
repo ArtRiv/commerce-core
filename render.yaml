@@ -48,7 +48,7 @@ services:
       # Real freight, not the built-in development table. Prices are reviewable
       # here rather than invisible in a dashboard.
       - key: SHIPPING_TABLE
-        value: '[{"code":"padrao-sudeste","label":"Entrega padrão","prefixes":["0","1","2","3"],"etaDays":5,"rates":[{"upToGrams":1000,"priceCents":1990},{"upToGrams":30000,"priceCents":3990}]},{"code":"padrao-brasil","label":"Entrega padrão","prefixes":["4","5","6","7","8","9"],"etaDays":10,"rates":[{"upToGrams":30000,"priceCents":4990}]}]'
+        value: '[{"code":"padrao-sudeste","label":"Entrega padrão","prefixes":["0","1","2","3"],"estimatedDays":5,"rates":[{"upToGrams":1000,"priceCents":1990},{"upToGrams":30000,"priceCents":3990}]},{"code":"padrao-brasil","label":"Entrega padrão","prefixes":["4","5","6","7","8","9"],"estimatedDays":10,"rates":[{"upToGrams":30000,"priceCents":4990}]}]'
 
       # Only reached by a product with no weight of its own. The seeded catalog
       # carries real weights, so this is a floor, not the usual case.

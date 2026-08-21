@@ -70,3 +70,36 @@ day the deferred `ClassSerializerInterceptor` from
 [`specs/openapi.md`](specs/openapi.md) lands, since an unexposed field
 stops being sent whether or not the query selects it (found during the
 OpenAPI route audit, 2026-08-20).
+
+## shipping: the freight table parser ignores keys it does not know
+
+**Where**: `parseShippingTable` (`src/shipping/shipping-table.ts`).
+
+**What**: validation checks the fields it knows about and says nothing
+about the rest, so a misspelled key is not an error — it is a silently
+absent value. `.env.example` and `docs/specs/shipping.md` both documented
+the delivery estimate as `etaDays` while the parser has always read
+`estimatedDays`, and the result was a table that loads, boots, prices
+freight correctly and quotes **every option with no ETA at all**. The
+order stores `shippingEtaDays: null` and the confirmation e-mail has no
+estimate to show.
+
+The documented example was wrong for as long as it existed and nothing
+caught it: the boot guard passes, the unit tests use their own fixtures
+(which spell it correctly), and a null ETA is a legal value for an option
+that genuinely has none.
+
+**Why accepted for v1**: the data is fixed — `.env.example`, the spec and
+`render.yaml` now all say `estimatedDays`, verified through the parser
+itself rather than by eye (found while wiring the deploy, 2026-08-21).
+What is left is the parser's tolerance, and tightening it is a behaviour
+change: a table that a running deployment accepts today would start
+refusing to boot, which is not a thing to slip into a deploy PR.
+
+**Fix sketch**: reject unknown keys per option and per rate, in the same
+pass that already validates the known ones, naming the offending key and
+option the way every other message in that file does. Suggesting the
+nearest known key ("unknown option key \"etaDays\" — did you mean
+\"estimatedDays\"?") is what turns it from a rule into a fix. Worth doing
+next time that file is open, and worth a line in the spec's config
+section either way.
