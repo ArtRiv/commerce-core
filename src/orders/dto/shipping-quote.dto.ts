@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { IsString, Matches } from 'class-validator';
 
 import { POSTAL_CODE_PATTERN } from '../../shipping/shipping-table';
@@ -8,6 +9,11 @@ export class ShippingQuoteDto {
    * quote needs: in Brazil the postal code determines city and state, and it
    * is what carriers price against.
    */
+  @ApiProperty({
+    description:
+      'Destination CEP, 8 digits, hyphen optional. The only input a quote needs: in Brazil the postal code determines city and state, and it is what carriers price against.',
+    example: '80000-000',
+  })
   @IsString()
   @Matches(POSTAL_CODE_PATTERN, {
     message: 'postalCode must be a CEP, e.g. 80000-000',
