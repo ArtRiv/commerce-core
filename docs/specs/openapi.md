@@ -76,11 +76,23 @@ Este módulo não tem regra de negócio — tem regras sobre o **documento**.
   `@ApiOperation` escrito à mão dizendo "requer orders.refund" seria
   exatamente a duplicação que envelhece.
 
-- **Rota protegida por default, igual ao guard.** O `JwtAuthGuard` é
-  global com opt-out por `@Public()`, e o documento espelha isso: o
-  bearer é declarado como requisito global no `DocumentBuilder`, e as
-  rotas `@Public()` o removem. Documentar rota por rota inverteria o
-  default e a primeira rota nova esquecida apareceria como pública.
+- **O documento tem que concordar com o guard, e é um teste que garante
+  isso.** O `JwtAuthGuard` é global com opt-out por `@Public()`, então a
+  verdade sobre "esta rota exige token" já existe num lugar só: o
+  metadado `IS_PUBLIC_KEY`. O documento declara o bearer rota a rota (via
+  os decorators compostos abaixo), e um teste varre os controllers,
+  compara o metadado do guard com o `security` de cada operação e falha
+  nas **duas** direções — rota protegida sem bearer no documento, e rota
+  `@Public()` declarando um.
+
+  A alternativa — `addSecurityRequirements` global no `DocumentBuilder`
+  com as rotas `@Public()` limpando — foi descartada na implementação:
+  limpar exige `security: []` no nível da operação, o único caminho pra
+  isso é `@ApiOperation`, e o `@ApiOperation` do `@nestjs/swagger`
+  reinjeta `summary: ''` a cada aplicação. Duas aplicações no mesmo
+  handler (a do `@Public()` e a que escreve o resumo) apagariam o resumo
+  dependendo da ordem dos decorators — um bug silencioso e sensível a
+  formatação. O teste dá a mesma garantia sem depender de ordem.
 
 - **`@Public()` não quer dizer "anônimo".** Três rotas públicas são
   auth-aware: `GET /products` e `GET /products/:idOrSlug` usam o
