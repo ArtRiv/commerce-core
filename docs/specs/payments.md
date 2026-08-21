@@ -708,13 +708,15 @@ depende de uma decisão que não é só técnica.
   mantém isso verdadeiro se qualquer uma dessas coisas mudar, ou se
   alguém criar um Payment Link com o `client_reference_id` de um pedido
   existente. Custa carregar `amountTotal`/`currency` no evento de domínio.
-- **`trust proxy` / chave de rate limit.** O throttler chaveia pelo IP do
-  socket e o app nunca declara `trust proxy`, então atrás de um load
-  balancer **todo mundo divide um balde só** — dá pra queimar os 300/min
-  do webhook (atrasando entregas reais, que voltam por backoff) ou os
-  10/min do `/pay` da base inteira. É anterior a este módulo (vale pro
-  auth também) e a correção depende da topologia de deploy, que ainda não
-  existe.
+- ~~**`trust proxy` / chave de rate limit.**~~ **Resolvido no deploy**
+  (2026-08-21). A topologia de que a correção dependia passou a existir:
+  `TRUST_PROXY_HOPS` é obrigatória fora de `development`/`test`, com a
+  mesma lista de permissão das outras duas guardas de boot, e o app
+  declara `trust proxy` a partir dela (`src/trust-proxy.ts`,
+  [`deploy.md`](deploy.md)). É um número de saltos, não `true`, porque
+  `true` faz o Express confiar no `X-Forwarded-For` que o **cliente**
+  escreve — trocar um balde compartilhado por um balde forjável não
+  seria correção.
 - **Serializar `/pay` concorrente.** Duas chamadas simultâneas num pedido
   sem `paymentRef` leem `null` as duas e criam duas sessões — a gravação
   condicional em `CREATED` não separa esse caso, porque as duas casam. O

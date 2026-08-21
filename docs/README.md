@@ -20,6 +20,11 @@ convenções combinadas para trabalhar com o Claude Code neste repo.
   API em si: como o documento OpenAPI é montado, por que a permissão de
   cada rota sai do mesmo decorator que a impõe, e o inventário auditado
   das 38 rotas (com as divergências spec ↔ código que a auditoria achou).
+- [`deploy.md`](deploy.md) — runbook de produção: como o serviço no
+  Render, o Supabase de produção e o webhook do Stripe são criados, o que
+  fazer numa migration nova e o que muda no dia em que houver uma segunda
+  instância. O _porquê_ de cada escolha está em
+  [`specs/deploy.md`](specs/deploy.md).
 - [`known-issues.md`](known-issues.md) — bugs e lacunas encontrados
   depois que um módulo já foi entregue, aceitos por ora mas não
   esquecidos. Não é backlog de feature (isso mora nas "decisões
