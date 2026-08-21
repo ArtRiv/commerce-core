@@ -38,12 +38,18 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+# dotenv environment variable files.
+#
+# The glob is deliberately wide rather than a list of known names. A stray
+# .env.bak, .env.backup or .env.old holds exactly the same secrets as .env
+# and is one `git add -A` away from being public — and it is precisely the
+# file nobody remembers to add here, because it gets created in a hurry
+# while editing the real one.
+#
+# .env.example is the single exception: it carries no secrets and is the
+# checked-in documentation of what the app needs to run.
+.env*
+!.env.example
 
 # temp directory
 .temp
