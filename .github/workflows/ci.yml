@@ -74,9 +74,26 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # 252 unit tests, ~20s, no environment variables required.
+      # 402 unit tests, ~20s, no environment variables required. Includes
+      # src/openapi/document.spec.ts, which boots the module graph in preview
+      # mode and asserts the published document still agrees with the guards.
       - name: Unit tests
         run: pnpm test
 
       - name: Build
         run: pnpm build
+
+      # openapi.json is committed, because it is the artefact the frontend
+      # generates its client from and because a diff on it is the clearest
+      # review signal that a PR changed the public contract. That only works if
+      # it cannot go stale, hence this step.
+      #
+      # It runs the generator straight off the build above instead of
+      # `pnpm openapi:generate`, which would rebuild for nothing. Like every
+      # other step here it needs no database and no keys: the generator boots
+      # Nest with `preview: true`, which registers controllers without
+      # instantiating a single provider.
+      - name: OpenAPI document is up to date
+        run: |
+          node dist/src/openapi/generate.js
+          git diff --exit-code -- openapi.json

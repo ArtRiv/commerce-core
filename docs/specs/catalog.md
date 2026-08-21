@@ -174,6 +174,7 @@ class CreateProductDto {
   imageUrls?: string[];
   status?: ProductStatus; // default DRAFT
   stockQuantity?: number; // int >= 0, default 0
+  weightGrams?: number; // int >= 1; adicionado por shipping.md
   categoryIds?: string[];
 }
 
@@ -199,6 +200,15 @@ class CreateCategoryDto {
 ```
 
 Resposta de listagem: `{ items, total, page, perPage }`.
+
+> **Emenda de [`shipping.md`](shipping.md).** `Product` ganhou
+> `weightGrams` (opcional, int >= 1) pra cotação de frete, e ele entra
+> nos dois DTOs de escrita acima. Produto sem peso é cotado pelo
+> `SHIPPING_DEFAULT_WEIGHT_GRAMS` do ambiente — a loja paga a diferença
+> quando o palpite é baixo, então vale preencher. Esta seção tinha ficado
+> desatualizada: o campo estava no código e specado lá, mas não aqui, que
+> é a spec autoritativa destas rotas. Levantado pela auditoria de rotas em
+> [`openapi.md`](openapi.md).
 
 ## Critérios de aceitação
 

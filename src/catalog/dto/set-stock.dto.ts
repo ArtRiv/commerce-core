@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { IsInt, Min } from 'class-validator';
 
 /**
@@ -6,6 +7,12 @@ import { IsInt, Min } from 'class-validator';
  * StockService.decrement, which orders calls internally.
  */
 export class SetStockDto {
+  @ApiProperty({
+    minimum: 0,
+    description:
+      'The absolute count on the shelf, not a delta. Selling is the other path — checkout decrements atomically on its own.',
+    example: 12,
+  })
   @IsInt()
   @Min(0)
   quantity!: number;
