@@ -16,6 +16,10 @@ convenções combinadas para trabalhar com o Claude Code neste repo.
   de qualquer módulo existir; atualize o diagrama sempre que a
   implementação divergir do que está desenhado, pra não virar
   documentação morta.
+- [`specs/openapi.md`](specs/openapi.md) — a spec da documentação da
+  API em si: como o documento OpenAPI é montado, por que a permissão de
+  cada rota sai do mesmo decorator que a impõe, e o inventário auditado
+  das 38 rotas (com as divergências spec ↔ código que a auditoria achou).
 - [`known-issues.md`](known-issues.md) — bugs e lacunas encontrados
   depois que um módulo já foi entregue, aceitos por ora mas não
   esquecidos. Não é backlog de feature (isso mora nas "decisões

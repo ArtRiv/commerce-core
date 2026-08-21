@@ -3,20 +3,30 @@
   "paths": {
     "/": {
       "get": {
-        "operationId": "AppController_getHello",
+        "description": "Answers as long as the process is up and serving. It touches no database and no external provider on purpose: a liveness probe that fails when a dependency blinks gets the container restarted for no reason, turning one outage into two. Readiness — the check that does ask whether dependencies are reachable — is a separate route and does not exist yet.",
+        "operationId": "AppController_getHealth",
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Liveness probe",
         "tags": [
-          "App"
+          "health"
         ]
       }
     },
     "/auth/register": {
       "post": {
+        "description": "Creates an unverified account and sends the verification e-mail. This does NOT sign anyone in: password login stays closed until the e-mailed link is followed, so there is no token in the response.\n\nRegistering again with an address that exists but was never verified is treated as \"I forgot I already did this\" — the link is resent and no second account appears. The new account always gets the default role (`customer`); roles are never chosen by the registrant.\n\nIf the mail provider is down the account is still created, and the caller can ask for a resend later — e-mail delivery does not block registration.",
         "operationId": "AuthController_register",
         "parameters": [],
         "requestBody": {
@@ -31,16 +41,63 @@
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredUserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid e-mail, or a password outside 8–128 characters. There are no composition rules (docs/security.md).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That address already belongs to a verified account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 5 requests per hour, per IP.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Create an account",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/verify-email": {
       "post": {
+        "description": "Consumes the token from the verification e-mail, which is what unlocks password login. Tokens are single-use and expire after 24 hours.",
         "operationId": "AuthController_verifyEmail",
         "parameters": [],
         "requestBody": {
@@ -55,16 +112,28 @@
         },
         "responses": {
           "204": {
-            "description": ""
+            "description": "The address is now verified."
+          },
+          "400": {
+            "description": "The token is missing, malformed, expired, or already used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Confirm an e-mail address",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/resend-verification": {
       "post": {
+        "description": "**Always answers 204, whether or not the address has an account** — and whether or not it was already verified. That is deliberate: a response that varied would turn this endpoint into an oracle for which addresses are registered (docs/security.md). Do not build a \"no such account\" state on this route; the API will never report one.\n\nThe rate limit is low and keyed by e-mail rather than IP, because the abuse here is not against this API — it is using its sending reputation to flood a stranger's inbox.",
         "operationId": "AuthController_resendVerification",
         "parameters": [],
         "requestBody": {
@@ -79,16 +148,46 @@
         },
         "responses": {
           "204": {
-            "description": ""
+            "description": "Accepted. An e-mail may or may not have been sent."
+          },
+          "400": {
+            "description": "The value is not a well-formed e-mail address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 3 requests per hour, per e-mail address.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Resend the verification e-mail",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/login": {
       "post": {
+        "description": "Requires a verified address. A wrong e-mail and a wrong password produce the identical 401 — the response never reveals which half was wrong, nor whether the account exists, nor that an account is Google-only and has no password at all.\n\nThe rate limit applies per IP **and** per account: limiting only by IP hands an attacker with a proxy pool a fresh budget per address while punishing an office behind one NAT.",
         "operationId": "AuthController_login",
         "parameters": [],
         "requestBody": {
@@ -103,16 +202,63 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPairResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed e-mail, or a password over 128 characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong credentials, or the address has not been verified yet. The message does not distinguish the cases.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 5 requests per 15 minutes, per IP and per account.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Sign in with e-mail and password",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/forgot-password": {
       "post": {
+        "description": "**Always answers 204, whether or not the address has an account** — same anti-enumeration rule as resend-verification, and the same warning: there is no \"unknown e-mail\" response to render.\n\nAn account that only ever signed in with Google gets the same 204 and no e-mail, since it has no password to reset.",
         "operationId": "AuthController_forgotPassword",
         "parameters": [],
         "requestBody": {
@@ -127,16 +273,46 @@
         },
         "responses": {
           "204": {
-            "description": ""
+            "description": "Accepted. An e-mail may or may not have been sent."
+          },
+          "400": {
+            "description": "The value is not a well-formed e-mail address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 3 requests per hour, per e-mail address.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Start a password reset",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/reset-password": {
       "post": {
+        "description": "Sets a new password from the token in the reset e-mail. Tokens are single-use and expire after 1 hour.\n\nTwo side effects worth knowing. Every existing session is revoked — not just the current one — because a password change is exactly when \"sign me out everywhere\" is the right default. And the address is marked verified if it was not already: reaching a reset token proves possession of the mailbox, which is the same proof the verification e-mail asks for.",
         "operationId": "AuthController_resetPassword",
         "parameters": [],
         "requestBody": {
@@ -151,44 +327,97 @@
         },
         "responses": {
           "204": {
-            "description": ""
+            "description": "Password changed, and every prior session revoked."
+          },
+          "400": {
+            "description": "The token is missing, expired or already used, or the new password is outside 8–128 characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Finish a password reset",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/google": {
       "get": {
+        "description": "Redirects to Google. Open it in a browser — this is not an XHR endpoint, and it never returns a body of its own.\n\nGoogle sign-in is optional configuration: where the deployment has no Google credentials, this answers 503 rather than pretending the route does not exist.",
         "operationId": "AuthController_google",
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Redirects (302) to Google."
+          },
+          "503": {
+            "description": "Google sign-in is not configured on this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Start the Google sign-in flow",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/google/callback": {
       "get": {
+        "description": "Where Google returns the user. Called by the browser, not by application code — the redirect URI registered with Google must match this URL exactly.\n\nAn account is created on first sign-in, already verified. If the address already has an account it is linked rather than duplicated, matching on Google's subject id first and the address second. Linking only happens when Google asserts `email_verified`: that assertion is what replaces our own verification e-mail, and without it the sign-in is refused.",
         "operationId": "AuthController_googleCallback",
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPairResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Consent was denied, the exchange failed, or Google did not vouch for the address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Google sign-in is not configured on this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Google OAuth callback",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/refresh": {
       "post": {
+        "description": "No bearer token needed: the refresh token **is** the credential, and the access token has usually expired by the time a client needs this.\n\nRefresh tokens are single-use. Each call returns a new pair and retires the one presented. Re-presenting a spent token is read as theft and revokes the whole session family, so a client must never issue two refreshes concurrently with the same token.\n\nThe limit here is generous because it is anti-flood, not anti-guessing — a refresh token is 256 bits of randomness stored as a hash, so there is nothing to brute-force.",
         "operationId": "AuthController_refresh",
         "parameters": [],
         "requestBody": {
@@ -203,16 +432,63 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPairResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The refresh token is missing or empty.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The token is unknown, expired, already used, or belongs to a revoked family.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 60 requests per minute, per IP.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Exchange a refresh token for a new pair",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/auth/logout": {
       "post": {
+        "description": "Takes the refresh token in the body **as well as** the access token in the header, and both are needed. The access token carries only a user id, so on its own it cannot say which session to end — revoking on that alone would sign the user out of every device, which is a different feature.\n\nThe refresh token presented must belong to the authenticated caller. Only that session family is revoked; the access token is stateless and simply expires on its own within 15 minutes.",
         "operationId": "AuthController_logout",
         "parameters": [],
         "requestBody": {
@@ -227,28 +503,141 @@
         },
         "responses": {
           "204": {
-            "description": ""
+            "description": "That session family is revoked."
+          },
+          "400": {
+            "description": "The refresh token is missing or empty.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "End the current session",
         "tags": [
-          "Auth"
+          "auth"
         ]
       }
     },
     "/products": {
       "get": {
+        "description": "The storefront listing. Public, but privilege-aware: **sending a bearer token that carries `products.read` changes what comes back**, since only that caller may use the `status` filter and therefore see DRAFT or ARCHIVED products. Without a token, or with one lacking the permission, the listing is ACTIVE products only.\n\nOpenAPI cannot express \"optional bearer\", so this route is documented as unauthenticated — but a token is accepted, and a token that is offered and rejected is a 401 rather than a silent downgrade to anonymous.",
         "operationId": "ProductsController_list",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "description": "Values above 100 are clamped, not rejected.",
+            "schema": {
+              "minimum": 1,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "description": "Category slug.",
+            "schema": {
+              "example": "camisetas",
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive partial match on the name. Not a search engine.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "REQUIRES the `products.read` permission — without it this is a 403, not a silently ignored filter. `all` means every status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "DRAFT",
+                "ACTIVE",
+                "ARCHIVED",
+                "all"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedProductsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter failed validation — a non-integer `page`, or a `status` outside the enum.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The `status` filter was used without the `products.read` permission. Asking a privileged question is refused rather than silently answered as if ACTIVE had been requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "List products",
         "tags": [
-          "Products"
+          "products"
         ]
       },
       "post": {
+        "description": "Products are born DRAFT and stay off the storefront until moved to ACTIVE. Omitting `slug` generates one from the name, adding a numeric suffix on collision; sending one that is already taken is a 409 instead, because a caller who chose the slug wants that slug.",
         "operationId": "ProductsController_create",
         "parameters": [],
         "requestBody": {
@@ -262,6 +651,26 @@
           }
         },
         "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`priceCents` is not an integer above zero, a category id is not a UUID, an image is not a URL, or the slug is not lowercase-hyphenated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -281,6 +690,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "One of the `categoryIds` does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The slug sent explicitly is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -288,36 +717,59 @@
             "bearer": []
           }
         ],
+        "summary": "Create a product",
         "tags": [
-          "Products"
+          "products"
         ]
       }
     },
     "/products/{idOrSlug}": {
       "get": {
+        "description": "Accepts either the id or the slug in the same path segment — ids are UUIDs and slugs never look like one, so the two cannot collide. Prefer the id for links that must survive a rename.\n\nA non-ACTIVE product is a 404 to anyone without `products.read`, identical to a product that does not exist. A 403 would confirm to someone probing slugs that an unreleased product is sitting there.",
         "operationId": "ProductsController_get",
         "parameters": [
           {
             "name": "idOrSlug",
             "required": true,
             "in": "path",
+            "description": "The product UUID or its slug.",
             "schema": {
+              "example": "camiseta-azul",
               "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product — or it is DRAFT/ARCHIVED and the caller lacks `products.read`. The two are deliberately indistinguishable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Get one product",
         "tags": [
-          "Products"
+          "products"
         ]
       }
     },
     "/products/{id}/stock": {
       "patch": {
+        "description": "An inventory correction — \"the shelf holds N\" — not a delta. Selling is the other path: checkout decrements atomically inside its transaction, and nothing here is involved in that.\n\nBe aware this is last-write-wins against a concurrent sale, which is accepted for v1 (docs/specs/catalog.md).",
         "operationId": "ProductsController_setStock",
         "parameters": [
           {
@@ -325,6 +777,7 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -340,6 +793,26 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`quantity` is negative or not an integer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -359,6 +832,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No product with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -366,13 +849,15 @@
             "bearer": []
           }
         ],
+        "summary": "Set stock to an absolute quantity",
         "tags": [
-          "Products"
+          "products"
         ]
       }
     },
     "/products/{id}": {
       "patch": {
+        "description": "Every field is optional; omitted fields are left alone. `categoryIds` is the exception to \"partial\": absent leaves the associations untouched, present **replaces the whole set**.\n\nThis is also how a product reaches ACTIVE — there is no separate publish route.",
         "operationId": "ProductsController_update",
         "parameters": [
           {
@@ -380,6 +865,7 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -395,6 +881,26 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -414,6 +920,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No product with that id, or a category id does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The new slug is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -421,11 +947,13 @@
             "bearer": []
           }
         ],
+        "summary": "Update a product",
         "tags": [
-          "Products"
+          "products"
         ]
       },
       "delete": {
+        "description": "**Archives rather than deletes.** Orders reference products forever, so removing the row would break financial history; the product moves to ARCHIVED, leaves the storefront and refuses new sales, and the row stays.\n\nThe response is the archived product, not an empty body.",
         "operationId": "ProductsController_archive",
         "parameters": [
           {
@@ -433,11 +961,22 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -457,6 +996,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No product with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -464,25 +1013,39 @@
             "bearer": []
           }
         ],
+        "summary": "Archive a product",
         "tags": [
-          "Products"
+          "products"
         ]
       }
     },
     "/categories": {
       "get": {
+        "description": "Unpaginated, and deliberately so: categories have no status and v1 keeps them flat with no nesting, so the whole set is small enough to be one response a storefront can cache as its navigation.",
         "operationId": "CategoriesController_list",
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CategoryResponse"
+                  }
+                }
+              }
+            }
           }
         },
+        "summary": "List every category",
         "tags": [
-          "Categories"
+          "categories"
         ]
       },
       "post": {
+        "description": "Gated on `products.create` rather than a category-specific permission: the catalog is treated as one capability, since no role manages one without the other. Slug behaviour matches products — generated from the name when omitted, 409 when sent and already taken.",
         "operationId": "CategoriesController_create",
         "parameters": [],
         "requestBody": {
@@ -496,6 +1059,26 @@
           }
         },
         "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`name` is empty, or the slug is not lowercase-hyphenated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -515,6 +1098,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The slug sent explicitly is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -522,13 +1115,15 @@
             "bearer": []
           }
         ],
+        "summary": "Create a category",
         "tags": [
-          "Categories"
+          "categories"
         ]
       }
     },
     "/categories/{slug}": {
       "get": {
+        "description": "By slug, not id — this is the storefront lookup, and the id form has no consumer. The write routes below take the id.",
         "operationId": "CategoriesController_get",
         "parameters": [
           {
@@ -536,17 +1131,36 @@
             "required": true,
             "in": "path",
             "schema": {
+              "example": "camisetas",
               "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No category with that slug.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "summary": "Get one category by slug",
         "tags": [
-          "Categories"
+          "categories"
         ]
       }
     },
@@ -559,6 +1173,7 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -574,6 +1189,26 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -593,6 +1228,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No category with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The new slug is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -600,11 +1255,13 @@
             "bearer": []
           }
         ],
+        "summary": "Update a category",
         "tags": [
-          "Categories"
+          "categories"
         ]
       },
       "delete": {
+        "description": "A real delete, unlike products — no order ever references a category, so there is no history to protect.\n\n**Products attached to it survive**, simply losing the association; a product in no category is valid. Only the association rows cascade.",
         "operationId": "CategoriesController_remove",
         "parameters": [
           {
@@ -612,11 +1269,15 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
+          "204": {
+            "description": "Deleted. Its products remain, now uncategorised."
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -636,6 +1297,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No category with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -643,39 +1314,89 @@
             "bearer": []
           }
         ],
+        "summary": "Delete a category",
         "tags": [
-          "Categories"
+          "categories"
         ]
       }
     },
     "/cart": {
       "get": {
+        "description": "Always succeeds for an authenticated caller. A user who has never added anything gets `{ \"items\": [] }` rather than a 404 — the cart is created lazily on the first add, and its absence is not an error.\n\nProduct data on each line is read **live from the catalog**, not frozen: price, status and stock are current as of this request. That is what lets a storefront warn \"only 2 left\" or \"no longer available\". Prices freeze at checkout and not before.",
         "operationId": "CartController_get",
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get the current cart",
         "tags": [
-          "Cart"
+          "cart"
         ]
       },
       "delete": {
+        "description": "Removes every line. Idempotent — emptying an already-empty cart is a 200 with an empty list, not an error.",
         "operationId": "CartController_clear",
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Empty the cart",
         "tags": [
-          "Cart"
+          "cart"
         ]
       }
     },
     "/cart/items": {
       "post": {
+        "description": "Additive: adding a product already in the cart **increases** its quantity rather than creating a second line. Use PATCH below to set an absolute quantity.\n\nOnly ACTIVE products can be added. A DRAFT, ARCHIVED or nonexistent product is the same 404 — the public does not get to tell an unreleased product from one that never existed.",
         "operationId": "CartController_addItem",
         "parameters": [],
         "requestBody": {
@@ -690,16 +1411,60 @@
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "The whole cart, not just the line that changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`productId` is not a UUID, or `quantity` is outside 1–999.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product, or it is not ACTIVE.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Add to the cart",
         "tags": [
-          "Cart"
+          "cart"
         ]
       }
     },
     "/cart/items/{productId}": {
       "patch": {
+        "description": "Absolute — \"make it 5\" — as opposed to POST /cart/items, which adds. To remove a line use DELETE; zero is not a valid quantity here.",
         "operationId": "CartController_setQuantity",
         "parameters": [
           {
@@ -707,6 +1472,7 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -723,11 +1489,54 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`quantity` is outside 1–999.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "That product is not in the cart.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Set a line to an absolute quantity",
         "tags": [
-          "Cart"
+          "cart"
         ]
       },
       "delete": {
@@ -738,22 +1547,57 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "That product is not in the cart.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Remove one line from the cart",
         "tags": [
-          "Cart"
+          "cart"
         ]
       }
     },
     "/orders": {
       "post": {
+        "description": "Turns the caller's cart into an immutable order, in one transaction: item names and prices are frozen, stock is decremented atomically, and the cart is consumed. Two concurrent checkouts of the same cart produce exactly one order; the loser gets a 409.\n\n`shippingOptionCode` must come from a POST /shipping/quote, and `quotedShippingCents` is **an assertion, not an instruction** — the server re-quotes and charges its own number, comparing yours only to catch a stale price. A mismatch is a 409 carrying the current options, not a silent charge at a price the customer never saw.\n\nThe two provider failures are treated differently on purpose. If the **payment** provider is down the order is still created and `payment` is null — recoverable, and POST /orders/{id}/pay is the recovery. If the **shipping** provider is down this fails with 503 and no order exists, because an order with the wrong total is born immutable and nothing can repair it.",
         "operationId": "OrdersController_checkout",
         "parameters": [],
         "requestBody": {
@@ -768,28 +1612,174 @@
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderWithPaymentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The address failed validation, the postal code is not a well-formed CEP, or `quotedShippingCents` is negative.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The cart is empty, an item is out of stock or no longer ACTIVE (the message names the products), the shipping code is unknown, or the quoted freight no longer matches. Nothing is created and no stock moves.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Freight could not be quoted. No order was created — retry is safe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Check out the cart",
         "tags": [
-          "Orders"
+          "orders"
         ]
       },
       "get": {
+        "description": "Scoped by who is asking. Without `orders.read` the listing is silently limited to the caller's own orders — there is no way to ask for anyone else's. With it, every order is visible and the `userId` filter becomes usable.\n\nA `userId` filter naming a user with no orders is an empty list, not a 404.",
         "operationId": "OrdersController_list",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "description": "Values above 100 are clamped, not rejected.",
+            "schema": {
+              "minimum": 1,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "CREATED",
+                "PAID",
+                "SHIPPED",
+                "DELIVERED",
+                "CANCELLED",
+                "REFUNDED"
+              ]
+            }
+          },
+          {
+            "name": "userId",
+            "required": false,
+            "in": "query",
+            "description": "REQUIRES the `orders.read` permission — without it this is a 403. A customer listing is always implicitly their own, with or without this.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedOrdersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The `userId` filter was used without the `orders.read` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List orders",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/orders/{id}/pay": {
       "post": {
+        "description": "The recovery path: a checkout the provider could not complete, a tab the buyer closed, an expired session. Callable by the order's owner, or by anyone holding `orders.update_status`.\n\nIt **returns the existing open session** rather than creating a second one — two live ways to pay the same order is how a buyer gets charged twice. If the provider says the session is already completed, the answer is 409: the money is in flight and only the confirmation is late.",
         "operationId": "OrdersController_pay",
         "parameters": [
           {
@@ -813,16 +1803,98 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderWithPaymentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Paying someone else's order requires the `orders.update_status` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order — or it belongs to someone else and the caller has no `orders.read`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not CREATED (already paid, cancelled, refunded), or the provider reports its session as already completed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 10 requests per minute.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The payment provider is unreachable. The order is untouched; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "(Re)issue a payment session",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/orders/{id}": {
       "get": {
+        "description": "Someone else's order answers **404, not 403** — confirming that an id exists would leak the existence of other people's orders to anyone willing to guess. A caller holding `orders.read` sees any order.",
         "operationId": "OrdersController_get",
         "parameters": [
           {
@@ -830,22 +1902,57 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order, or it belongs to someone else. The two are deliberately indistinguishable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get one order",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/orders/{id}/cancel": {
       "post": {
+        "description": "`CREATED → CANCELLED`, returning every item to stock. A customer may cancel their own; `orders.cancel` reaches anyone's.\n\nOnly a CREATED order can be cancelled. A PAID one is a 409 — giving money back is a different event with its own route and its own permission (POST /orders/{id}/refund). SHIPPED and DELIVERED are never cancellable.\n\nNote the two failure codes: a caller who cannot **see** the order gets 404, while one who can see it but may not cancel it gets 403.",
         "operationId": "OrdersController_cancel",
         "parameters": [
           {
@@ -853,22 +1960,77 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cancelling someone else's order requires the `orders.cancel` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order, or it belongs to someone else.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not CREATED. PAID orders are refunded, not cancelled; SHIPPED and DELIVERED are final.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel an order",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/orders/{id}/mark-paid": {
       "post": {
+        "description": "`CREATED → PAID`, for money that arrived outside the payment provider — a bank transfer, a Pix. The provider's webhook drives the same transition on its own; this route exists for everything the provider never sees.\n\nCalling it on an order that is already PAID is a 409. Webhook redelivery is deduplicated elsewhere and does not come through here.",
         "operationId": "OrdersController_markPaid",
         "parameters": [
           {
@@ -876,11 +2038,22 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -900,6 +2073,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No such order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not CREATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -907,13 +2100,15 @@
             "bearer": []
           }
         ],
+        "summary": "Record a payment by hand",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/orders/{id}/refund": {
       "post": {
+        "description": "`PAID → REFUNDED`: money back to the buyer, items back to the shelf. Full refunds only in v1.\n\nREFUNDED is a status of its own rather than CANCELLED, because a reversed sale and an abandoned unpaid order are different business events and anything counting one should not have to inspect a refund reference to exclude the other.\n\nOf the default roles only `admin` holds `orders.refund` — an operator who can ship and mark paid still cannot move money.",
         "operationId": "OrdersController_refund",
         "parameters": [
           {
@@ -921,11 +2116,22 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -945,6 +2151,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No such order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not PAID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -952,13 +2178,15 @@
             "bearer": []
           }
         ],
+        "summary": "Refund a paid order",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/orders/{id}/ship": {
       "post": {
+        "description": "`PAID → SHIPPED`. Tracking details are optional, and that is a business rule rather than a gap: a local courier hand-off is a real shipment with no code to quote, and demanding one would block it.",
         "operationId": "OrdersController_ship",
         "parameters": [
           {
@@ -966,6 +2194,7 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -981,6 +2210,26 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`trackingUrl` is not a valid URL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -1000,6 +2249,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No such order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not PAID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1007,13 +2276,15 @@
             "bearer": []
           }
         ],
+        "summary": "Mark an order shipped",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/orders/{id}/deliver": {
       "post": {
+        "description": "`SHIPPED → DELIVERED`, the terminal state of a happy order.",
         "operationId": "OrdersController_deliver",
         "parameters": [
           {
@@ -1021,11 +2292,22 @@
             "required": true,
             "in": "path",
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }
         ],
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No bearer token, or the token is expired or invalid.",
             "content": {
@@ -1045,6 +2327,26 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No such order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not SHIPPED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1052,27 +2354,98 @@
             "bearer": []
           }
         ],
+        "summary": "Mark an order delivered",
         "tags": [
-          "Orders"
+          "orders"
         ]
       }
     },
     "/payments/webhook": {
       "post": {
+        "description": "Called by the payment provider, never by application code. **Do not generate a client for this route** — it exists to be configured as a webhook destination in the provider dashboard.\n\n**There is no request schema, and none is invented here.** The body is the provider's own event envelope, read as raw bytes and never parsed by this API before its signature is checked. It is not part of this API's contract: the provider changes it when it likes, and the only part that matters here — the signature — travels in a header. The global validation pipe never sees this body either, because no DTO describes it.\n\nAuthentication is the `stripe-signature` header, an HMAC over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.\n\nA 200 means \"recorded, stop redelivering\", replays included: a redelivered event is acknowledged with `duplicate: true` rather than applied twice. Any non-2xx asks the provider to try again, which is this module's entire retry mechanism — the 503 below is deliberate for exactly that reason.",
         "operationId": "PaymentWebhookController_handle",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": ""
+        "parameters": [
+          {
+            "name": "stripe-signature",
+            "in": "header",
+            "description": "HMAC over the raw request body. Verifying it is the authentication of this route.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "The provider's raw event payload, passed through unparsed. Opaque by design — see the operation description.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
           }
         },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is missing, or the signature does not verify. The two are deliberately indistinguishable and never detailed further.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 300 requests per minute.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Refused on purpose so the provider redelivers — a refund arriving before the payment that explains it, for instance. The event stays unprocessed rather than being marked done with the order left wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receive a payment provider event",
         "tags": [
-          "PaymentWebhook"
+          "payments"
         ]
       }
     },
     "/shipping/quote": {
       "post": {
+        "description": "Prices freight for the caller's own cart to a destination postal code. There is no cart id and no item list in the request — the cart is whichever one the token belongs to.\n\nThe postal code alone determines the price: in Brazil the CEP fixes city and state, and it is what carriers quote against. City and state still travel in the order address, to print a label, but they never feed the price.\n\nAn **empty `options` list is a legitimate 200**, not an error: \"nothing can carry this, to there\" is a fact about the address and the cart, and retrying will not change it. A provider that is merely unreachable answers 503 instead — the two are kept apart on purpose, because one is worth retrying and the other never is.\n\nTake the `code` of the option the customer picks and send it to POST /orders as `shippingOptionCode`, along with the `priceCents` you displayed as `quotedShippingCents`.\n\nPOST rather than GET despite being a read: a postal code is personal data, and query strings end up in access logs and browser history.",
         "operationId": "ShippingQuoteController_quote",
         "parameters": [],
         "requestBody": {
@@ -1087,11 +2460,82 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShippingQuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The postal code is not a well-formed CEP (8 digits, hyphen optional).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The cart is empty — there is nothing to quote.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 30 requests per minute.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The shipping provider is unreachable. Distinct from an empty option list, which is a 200.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Quote freight for the cart",
         "tags": [
-          "ShippingQuote"
+          "shipping"
         ]
       }
     }
@@ -1147,33 +2591,77 @@
       }
     },
     "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok",
+            "enum": [
+              "ok"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "description": "Version of the published API contract.",
+            "example": "1.0.0"
+          },
+          "uptimeSeconds": {
+            "type": "number",
+            "description": "Seconds since this process started.",
+            "example": 1042
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "uptimeSeconds"
+        ]
+      },
       "RegisterDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Length policy only — no forced uppercase, digit or symbol. Composition rules push people towards predictable passwords, and OWASP advises against them. The 128 ceiling is DoS protection for the hashing, not a strength rule.",
+            "example": "correct horse battery staple"
+          },
+          "name": {
+            "type": "string",
+            "example": "Ada Lovelace"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "name"
+        ]
       },
-      "VerifyEmailDto": {
+      "RegisteredUserResponse": {
         "type": "object",
-        "properties": {}
-      },
-      "EmailDto": {
-        "type": "object",
-        "properties": {}
-      },
-      "LoginDto": {
-        "type": "object",
-        "properties": {}
-      },
-      "ResetPasswordDto": {
-        "type": "object",
-        "properties": {}
-      },
-      "RefreshTokenDto": {
-        "type": "object",
-        "properties": {}
-      },
-      "CreateProductDto": {
-        "type": "object",
-        "properties": {}
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "9b2f4a1e-0c33-4d7b-9f10-2a5c8e6d41bb"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "ada@example.com"
+          }
+        },
+        "required": [
+          "id",
+          "email"
+        ]
       },
       "ErrorResponse": {
         "type": "object",
@@ -1216,45 +2704,1253 @@
           "error"
         ]
       },
+      "VerifyEmailDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "From the verification e-mail. Single-use, expires after 24 hours."
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "EmailDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "ada@example.com"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "No minimum is enforced here, deliberately: rejecting a short password with 400 would tell an attacker their guess was refused by a rule rather than by the account.",
+            "example": "correct horse battery staple"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "TokenPairResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Bearer token for the Authorization header. Expires in 15 minutes.",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.<payload>.<signature>"
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Single-use token for POST /auth/refresh. Valid for 7 days; each use issues a new one and invalidates this one.",
+            "example": "3f1c1e0a…"
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken"
+        ]
+      },
+      "ResetPasswordDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "From the reset e-mail. Single-use, expires after 1 hour."
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Same policy as registration. Setting it revokes every existing session, not just the current one."
+          }
+        },
+        "required": [
+          "token",
+          "newPassword"
+        ]
+      },
+      "RefreshTokenDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "The refresh token from the last sign-in or refresh. Single-use: re-presenting a spent one revokes the whole session family.",
+            "example": "3f1c1e0a…"
+          }
+        },
+        "required": [
+          "refreshToken"
+        ]
+      },
+      "ProductCategoryResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Camisetas"
+          },
+          "slug": {
+            "type": "string",
+            "example": "camisetas"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug"
+        ]
+      },
+      "ProductResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Camiseta Azul"
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL identity. Mutable — GET /products/{idOrSlug} also accepts the immutable id, which is the safer choice for a link that must not break.",
+            "example": "camiseta-azul"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "priceCents": {
+            "type": "number",
+            "description": "Integer cents, always greater than zero. Never a float.",
+            "example": 7990
+          },
+          "imageUrls": {
+            "description": "Plain URLs. This API does not host images in v1.",
+            "example": [
+              "https://cdn.example.com/camiseta-azul.jpg"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "description": "Only ACTIVE products are visible without the `products.read` permission. DELETE archives rather than deleting, so ARCHIVED rows persist forever."
+          },
+          "weightGrams": {
+            "type": "number",
+            "nullable": true,
+            "description": "Unit weight in grams, used to price freight. Null means the store has never weighed it, and quotes fall back to a configured default — which the store pays for when the guess is low.",
+            "example": 180
+          },
+          "stockQuantity": {
+            "type": "number",
+            "description": "Never negative. Checkout decrements it atomically.",
+            "example": 42
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductCategoryResponse"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "description",
+          "priceCents",
+          "imageUrls",
+          "status",
+          "weightGrams",
+          "stockQuantity",
+          "categories",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaginatedProductsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductResponse"
+            }
+          },
+          "total": {
+            "type": "number",
+            "description": "Total matching the filters, not the page size.",
+            "example": 137
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "perPage": {
+            "type": "number",
+            "description": "Clamped to 100.",
+            "example": 20
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "perPage"
+        ]
+      },
+      "CreateProductDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "example": "Camiseta Azul"
+          },
+          "slug": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "Omit to generate one from the name, with a numeric suffix on collision. Send one that is taken and the answer is 409 — a caller who picked the slug wants that slug.",
+            "example": "camiseta-azul"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "priceCents": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Integer cents, greater than zero. Never a float.",
+            "example": 7990
+          },
+          "imageUrls": {
+            "maxItems": 20,
+            "description": "Plain URLs — this API does not host images in v1.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "default": "DRAFT",
+            "description": "Products are born DRAFT and stay off the storefront until ACTIVE."
+          },
+          "stockQuantity": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0,
+            "example": 42
+          },
+          "weightGrams": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Unit weight in grams, used to price freight. Omit and quotes fall back to a configured default — which the store pays for when the guess is low, so it is worth filling in.",
+            "example": 180
+          },
+          "categoryIds": {
+            "maxItems": 50,
+            "description": "Category ids. A product in no category is valid.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "priceCents"
+        ]
+      },
       "SetStockDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "quantity": {
+            "type": "number",
+            "minimum": 0,
+            "description": "The absolute count on the shelf, not a delta. Selling is the other path — checkout decrements atomically on its own.",
+            "example": 12
+          }
+        },
+        "required": [
+          "quantity"
+        ]
       },
       "UpdateProductDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "example": "Camiseta Azul"
+          },
+          "slug": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "example": "camiseta-azul"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "priceCents": {
+            "type": "number",
+            "minimum": 1,
+            "example": 7990
+          },
+          "imageUrls": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "description": "This is how a product reaches ACTIVE — there is no separate publish route."
+          },
+          "stockQuantity": {
+            "type": "number",
+            "minimum": 0,
+            "example": 42
+          },
+          "weightGrams": {
+            "type": "number",
+            "minimum": 1,
+            "example": 180
+          },
+          "categoryIds": {
+            "maxItems": 50,
+            "description": "Absent leaves the associations alone; present REPLACES the whole set.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "CategoryResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Camisetas"
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL identity. Unique, generated from the name when omitted.",
+            "example": "camisetas"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "description",
+          "createdAt",
+          "updatedAt"
+        ]
       },
       "CreateCategoryDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "example": "Camisetas"
+          },
+          "slug": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "Generated from the name when omitted; 409 when sent and already taken.",
+            "example": "camisetas"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          }
+        },
+        "required": [
+          "name"
+        ]
       },
       "UpdateCategoryDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "example": "Camisetas"
+          },
+          "slug": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "example": "camisetas"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          }
+        }
+      },
+      "CartProductResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Camiseta Azul"
+          },
+          "slug": {
+            "type": "string",
+            "example": "camiseta-azul"
+          },
+          "priceCents": {
+            "type": "number",
+            "description": "Current catalog price, in cents.",
+            "example": 7990
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ],
+            "description": "Anything other than ACTIVE means checkout will refuse this line with a 409 until it is removed."
+          },
+          "stockQuantity": {
+            "type": "number",
+            "description": "Current stock. Lower than the line quantity is not an error here — it becomes one at checkout.",
+            "example": 3
+          },
+          "weightGrams": {
+            "type": "number",
+            "nullable": true,
+            "example": 180
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "priceCents",
+          "status",
+          "stockQuantity",
+          "weightGrams"
+        ]
+      },
+      "CartItemResponse": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 999,
+            "example": 2
+          },
+          "product": {
+            "$ref": "#/components/schemas/CartProductResponse"
+          }
+        },
+        "required": [
+          "productId",
+          "quantity",
+          "product"
+        ]
+      },
+      "CartResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartItemResponse"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
       },
       "AddCartItemDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "productId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Must exist and be ACTIVE, or the answer is 404."
+          },
+          "quantity": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 999,
+            "description": "How many to ADD. A product already in the cart has its quantity increased rather than duplicated. The 999 bound applies per request, not to the resulting line.",
+            "example": 2
+          }
+        },
+        "required": [
+          "productId",
+          "quantity"
+        ]
       },
       "SetCartItemQuantityDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "quantity": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 999,
+            "description": "The absolute quantity for this line. Zero is not valid — use DELETE to remove the line.",
+            "example": 5
+          }
+        },
+        "required": [
+          "quantity"
+        ]
+      },
+      "ShippingAddressDto": {
+        "type": "object",
+        "properties": {
+          "line1": {
+            "type": "string",
+            "maxLength": 200,
+            "example": "Rua das Flores, 100"
+          },
+          "line2": {
+            "type": "string",
+            "maxLength": 200,
+            "example": "Apto 42"
+          },
+          "city": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Curitiba"
+          },
+          "state": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "PR"
+          },
+          "postalCode": {
+            "type": "string",
+            "description": "The only field here that prices anything. City and state are for the label; freight is quoted from the CEP alone.",
+            "example": "80000-000"
+          }
+        },
+        "required": [
+          "line1",
+          "city",
+          "state",
+          "postalCode"
+        ]
       },
       "CheckoutDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "shippingAddress": {
+            "description": "Stored as a denormalized snapshot on the order — there is no address book in v1.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShippingAddressDto"
+              }
+            ]
+          },
+          "paymentMode": {
+            "type": "string",
+            "enum": [
+              "hosted",
+              "embedded"
+            ],
+            "description": "Which checkout UI to issue. Defaults to the deployment setting, so one instance can serve a web storefront rendering its own checkout and a mobile app opening the hosted one."
+          },
+          "shippingOptionCode": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "The `code` of an option returned by POST /shipping/quote.",
+            "example": "padrao-sudeste"
+          },
+          "quotedShippingCents": {
+            "type": "number",
+            "minimum": 0,
+            "description": "The freight price the customer was SHOWN — an assertion, not an instruction. The server re-quotes and charges its own number; this one is only compared against it, and a mismatch is a 409 carrying fresh options. Both halves matter: trusting a client price would accept 0, and recomputing without comparing would charge someone a price they never saw.",
+            "example": 2490
+          }
+        },
+        "required": [
+          "shippingAddress",
+          "shippingOptionCode",
+          "quotedShippingCents"
+        ]
+      },
+      "OrderItemResponse": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Traceability back to the catalog. What to display is the snapshot beside it."
+          },
+          "productName": {
+            "type": "string",
+            "description": "The name at the moment of purchase.",
+            "example": "Camiseta Azul"
+          },
+          "unitPriceCents": {
+            "type": "number",
+            "description": "The price at the moment of purchase, in cents.",
+            "example": 7990
+          },
+          "quantity": {
+            "type": "number",
+            "example": 2
+          }
+        },
+        "required": [
+          "productId",
+          "productName",
+          "unitPriceCents",
+          "quantity"
+        ]
+      },
+      "PaymentSessionResponse": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "hosted",
+              "embedded"
+            ],
+            "description": "`hosted` redirects the buyer to the provider; `embedded` renders checkout inside your own page."
+          },
+          "url": {
+            "type": "string",
+            "nullable": true,
+            "description": "Where to send the buyer. Always null in `embedded` mode.",
+            "example": "https://checkout.stripe.com/c/pay/cs_test_…"
+          },
+          "clientSecret": {
+            "type": "string",
+            "nullable": true,
+            "description": "CREDENTIAL — hand it to the provider SDK in the browser and nowhere else. Always null in `hosted` mode, and never persisted by this API.",
+            "example": "cs_test_…_secret_…"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "mode",
+          "url",
+          "clientSecret",
+          "expiresAt"
+        ]
+      },
+      "OrderWithPaymentResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The buyer."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "CREATED",
+              "PAID",
+              "SHIPPED",
+              "DELIVERED",
+              "CANCELLED",
+              "REFUNDED"
+            ],
+            "description": "CREATED → PAID → SHIPPED → DELIVERED, with CREATED → CANCELLED and PAID → REFUNDED as the two exits. Any transition outside that map answers 409."
+          },
+          "itemsSubtotalCents": {
+            "type": "number",
+            "description": "Sum of unitPriceCents × quantity over the items.",
+            "example": 15980
+          },
+          "shippingCents": {
+            "type": "number",
+            "description": "Freight, frozen at checkout. Zero is legitimate (free shipping).",
+            "example": 2490
+          },
+          "totalCents": {
+            "type": "number",
+            "description": "THE AMOUNT CHARGED — itemsSubtotalCents + shippingCents, guaranteed by a database constraint.",
+            "example": 18470
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderItemResponse"
+            }
+          },
+          "shippingLine1": {
+            "type": "string",
+            "example": "Rua das Flores, 100"
+          },
+          "shippingLine2": {
+            "type": "string",
+            "nullable": true,
+            "example": "Apto 42"
+          },
+          "shippingCity": {
+            "type": "string",
+            "example": "Curitiba"
+          },
+          "shippingState": {
+            "type": "string",
+            "example": "PR"
+          },
+          "shippingPostalCode": {
+            "type": "string",
+            "example": "80000-000"
+          },
+          "shippingMethodCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "The freight option chosen at checkout. Null only on orders predating freight.",
+            "example": "padrao-sudeste"
+          },
+          "shippingMethodName": {
+            "type": "string",
+            "nullable": true,
+            "example": "Entrega padrão"
+          },
+          "shippingEtaDays": {
+            "type": "number",
+            "nullable": true,
+            "example": 5
+          },
+          "trackingCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Optional — a local hand-off is a real shipment with no code.",
+            "example": "BR123456789BR"
+          },
+          "trackingUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentRef": {
+            "type": "string",
+            "nullable": true,
+            "description": "INTERNAL — the payment provider's checkout session id. No client should depend on it; see docs/known-issues.md.",
+            "example": "cs_test_…"
+          },
+          "paymentUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "Hosted checkout URL of the last session issued. Prefer the `payment` object."
+          },
+          "paymentExpiresAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "paymentIntentRef": {
+            "type": "string",
+            "nullable": true,
+            "description": "INTERNAL — the provider's payment intent id. See docs/known-issues.md.",
+            "example": "pi_test_…"
+          },
+          "refundRef": {
+            "type": "string",
+            "nullable": true,
+            "description": "INTERNAL — the provider's refund id. See docs/known-issues.md.",
+            "example": "re_test_…"
+          },
+          "refundedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "shippedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "deliveredAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payment": {
+            "nullable": true,
+            "description": "Null when the payment provider was unreachable.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentSessionResponse"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "userId",
+          "status",
+          "itemsSubtotalCents",
+          "shippingCents",
+          "totalCents",
+          "items",
+          "shippingLine1",
+          "shippingLine2",
+          "shippingCity",
+          "shippingState",
+          "shippingPostalCode",
+          "shippingMethodCode",
+          "shippingMethodName",
+          "shippingEtaDays",
+          "trackingCode",
+          "trackingUrl",
+          "paymentRef",
+          "paymentUrl",
+          "paymentExpiresAt",
+          "paymentIntentRef",
+          "refundRef",
+          "refundedAt",
+          "paidAt",
+          "shippedAt",
+          "deliveredAt",
+          "cancelledAt",
+          "createdAt",
+          "updatedAt",
+          "payment"
+        ]
       },
       "PayOrderDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "paymentMode": {
+            "type": "string",
+            "enum": [
+              "hosted",
+              "embedded"
+            ],
+            "description": "Everything here is optional — asking for a way to pay needs no input. A client that renders its own checkout can insist on a mode, which decides whether an existing session is handed back or replaced."
+          }
+        }
+      },
+      "OrderResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The buyer."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "CREATED",
+              "PAID",
+              "SHIPPED",
+              "DELIVERED",
+              "CANCELLED",
+              "REFUNDED"
+            ],
+            "description": "CREATED → PAID → SHIPPED → DELIVERED, with CREATED → CANCELLED and PAID → REFUNDED as the two exits. Any transition outside that map answers 409."
+          },
+          "itemsSubtotalCents": {
+            "type": "number",
+            "description": "Sum of unitPriceCents × quantity over the items.",
+            "example": 15980
+          },
+          "shippingCents": {
+            "type": "number",
+            "description": "Freight, frozen at checkout. Zero is legitimate (free shipping).",
+            "example": 2490
+          },
+          "totalCents": {
+            "type": "number",
+            "description": "THE AMOUNT CHARGED — itemsSubtotalCents + shippingCents, guaranteed by a database constraint.",
+            "example": 18470
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderItemResponse"
+            }
+          },
+          "shippingLine1": {
+            "type": "string",
+            "example": "Rua das Flores, 100"
+          },
+          "shippingLine2": {
+            "type": "string",
+            "nullable": true,
+            "example": "Apto 42"
+          },
+          "shippingCity": {
+            "type": "string",
+            "example": "Curitiba"
+          },
+          "shippingState": {
+            "type": "string",
+            "example": "PR"
+          },
+          "shippingPostalCode": {
+            "type": "string",
+            "example": "80000-000"
+          },
+          "shippingMethodCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "The freight option chosen at checkout. Null only on orders predating freight.",
+            "example": "padrao-sudeste"
+          },
+          "shippingMethodName": {
+            "type": "string",
+            "nullable": true,
+            "example": "Entrega padrão"
+          },
+          "shippingEtaDays": {
+            "type": "number",
+            "nullable": true,
+            "example": 5
+          },
+          "trackingCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Optional — a local hand-off is a real shipment with no code.",
+            "example": "BR123456789BR"
+          },
+          "trackingUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentRef": {
+            "type": "string",
+            "nullable": true,
+            "description": "INTERNAL — the payment provider's checkout session id. No client should depend on it; see docs/known-issues.md.",
+            "example": "cs_test_…"
+          },
+          "paymentUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "Hosted checkout URL of the last session issued. Prefer the `payment` object."
+          },
+          "paymentExpiresAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "paymentIntentRef": {
+            "type": "string",
+            "nullable": true,
+            "description": "INTERNAL — the provider's payment intent id. See docs/known-issues.md.",
+            "example": "pi_test_…"
+          },
+          "refundRef": {
+            "type": "string",
+            "nullable": true,
+            "description": "INTERNAL — the provider's refund id. See docs/known-issues.md.",
+            "example": "re_test_…"
+          },
+          "refundedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "shippedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "deliveredAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "userId",
+          "status",
+          "itemsSubtotalCents",
+          "shippingCents",
+          "totalCents",
+          "items",
+          "shippingLine1",
+          "shippingLine2",
+          "shippingCity",
+          "shippingState",
+          "shippingPostalCode",
+          "shippingMethodCode",
+          "shippingMethodName",
+          "shippingEtaDays",
+          "trackingCode",
+          "trackingUrl",
+          "paymentRef",
+          "paymentUrl",
+          "paymentExpiresAt",
+          "paymentIntentRef",
+          "refundRef",
+          "refundedAt",
+          "paidAt",
+          "shippedAt",
+          "deliveredAt",
+          "cancelledAt",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaginatedOrdersResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderResponse"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 12
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "perPage": {
+            "type": "number",
+            "description": "Clamped to 100.",
+            "example": 20
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "perPage"
+        ]
       },
       "ShipOrderDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "trackingCode": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional by business rule, not by omission: a local courier hand-off is a real shipment with no code to quote.",
+            "example": "BR123456789BR"
+          },
+          "trackingUrl": {
+            "type": "string",
+            "maxLength": 2000,
+            "format": "uri",
+            "example": "https://rastreamento.correios.com.br/BR123456789BR"
+          }
+        }
+      },
+      "WebhookAckResponse": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "example": true,
+            "description": "Always true; a failure is a non-2xx."
+          },
+          "duplicate": {
+            "type": "boolean",
+            "example": false,
+            "description": "True when this event id had already been processed. Redelivery is normal and is not an error — the event is simply not applied twice."
+          }
+        },
+        "required": [
+          "received",
+          "duplicate"
+        ]
       },
       "ShippingQuoteDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "postalCode": {
+            "type": "string",
+            "description": "Destination CEP, 8 digits, hyphen optional. The only input a quote needs: in Brazil the postal code determines city and state, and it is what carriers price against.",
+            "example": "80000-000"
+          }
+        },
+        "required": [
+          "postalCode"
+        ]
+      },
+      "ShippingOptionResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable identity of the option. This is what POST /orders takes as `shippingOptionCode`.",
+            "example": "padrao-sudeste"
+          },
+          "label": {
+            "type": "string",
+            "example": "Entrega padrão"
+          },
+          "priceCents": {
+            "type": "number",
+            "description": "Integer cents. Zero is a real option at no cost, not a missing price.",
+            "example": 2490
+          },
+          "estimatedDays": {
+            "type": "number",
+            "nullable": true,
+            "example": 5
+          },
+          "carrier": {
+            "type": "string",
+            "nullable": true,
+            "example": "Correios"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "priceCents",
+          "estimatedDays",
+          "carrier"
+        ]
+      },
+      "ShippingQuoteResponse": {
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShippingOptionResponse"
+            }
+          }
+        },
+        "required": [
+          "options"
+        ]
       }
     }
   }

@@ -2,7 +2,22 @@
 
 ## Status
 
-`in-progress`
+`implementado`
+
+Todos os critérios de aceitação marcados. As 38 rotas estão documentadas,
+o documento é gerado por script sem banco nem chave de API, e
+`src/openapi/document.spec.ts` falha se ele parar de concordar com os
+guards.
+
+### Buracos de cobertura conhecidos
+
+- O teste garante **presença** (rota documentada, bearer onde o guard
+  exige, permissão nomeada no `403`), não **semântica**: uma rota que
+  ganhe um `409` novo e não o anote passa. Verificar isso automaticamente
+  exigiria descrever a convenção de erro numa segunda linguagem, que é
+  a duplicação que esta spec evita em todo lugar.
+- O `openapi.json` commitado é conferido pelo CI (`git diff --exit-code`
+  depois de regerar), então ele não envelhece em silêncio.
 
 Último item de escopo da v1 antes do deploy (`claude/context.md`:
 "Documentação da API via OpenAPI/Swagger (gerado pelo NestJS)"). Ao
@@ -132,9 +147,10 @@ Este módulo não tem regra de negócio — tem regras sobre o **documento**.
   entra como tipo de retorno do handler (`Promise<OrderResponse>`), o
   que faz o TypeScript recusar um campo que o service parou de devolver.
   Isso fecha a divergência por **omissão**, que é a comum. Não fecha a
-  divergência por **excesso** (TS aceita propriedade a mais num retorno),
-  e é por isso que o `paymentRef` abaixo é resolvido no `select`, não
-  esperando por um interceptor.
+  divergência por **excesso** (TS aceita propriedade a mais num retorno) —
+  e é exatamente por essa brecha que as refs do provedor, logo abaixo,
+  continuam viajando. Fechá-la é o trabalho do interceptor, que está nas
+  decisões adiadas.
 
 - **Nada sensível entra no documento.** `passwordHash` e os `tokenHash`
   (refresh, verificação, reset) não cruzam a fronteira hoje e nenhuma
@@ -143,12 +159,28 @@ Este módulo não tem regra de negócio — tem regras sobre o **documento**.
   O `clientSecret` e o `refreshToken` **são** devolvidos, de propósito,
   e ficam documentados com a ressalva de que são credenciais.
 
-- **`Order.paymentRef` sai das respostas.** É o `cs_…` do Stripe (ou a
-  ref do reembolso), encanamento interno do provedor viajando no
-  contrato público desde sempre — não é credencial, ninguém cobra nada
-  com ele, mas também não há consumidor pra ele. Removido pelo `select`
-  do Prisma, no service, e portanto ausente da classe de resposta. É a
-  única mudança de comportamento desta spec, e é subtrativa.
+- **As refs do provedor ficam nas respostas, e ficam documentadas como o
+  que são.** `Order` carrega `paymentRef` (`cs_…`), `paymentIntentRef`
+  (`pi_…`) e `refundRef` (`re_…`) — identificadores de objetos do Stripe
+  que viajam no contrato público de toda leitura de pedido. Não são
+  credenciais (ninguém cobra nada com eles) e o dono do pedido é quem os
+  recebe, mas também não existe consumidor pra eles: são encanamento.
+
+  A intenção inicial desta spec era removê-los pelo `select`. Foi
+  **revertida na implementação**, e o motivo importa: as suítes
+  `payments.e2e-spec.ts`, `orders.e2e-spec.ts` e `order-emails.e2e-spec.ts`
+  leem essas refs **da resposta HTTP** pra dirigir o Stripe falso — marcar
+  uma sessão como paga, montar o evento de webhook, conferir o reembolso.
+  São ~40 asserções em três arquivos. Removê-las é mudança de
+  comportamento com refactor de teste junto, dentro do PR que já toca as
+  38 rotas — exatamente o que a decisão "só documentação, sem mudança de
+  runtime" existe pra evitar.
+
+  Então o documento diz a verdade: os campos aparecem, com a descrição
+  dizendo que são internos e que nenhum cliente deveria depender deles.
+  A remoção está registrada em [`known-issues.md`](../known-issues.md)
+  com o esboço de conserto (os testes passam a ler do banco, como já
+  fazem pra outras asserções), pra ser um PR próprio e pequeno.
 
 - **Resposta sem corpo é resposta.** Seis rotas respondem `204`
   (`verify-email`, `resend-verification`, `forgot-password`,
@@ -186,8 +218,9 @@ Nenhuma rota nova de negócio. O que este módulo adiciona ao mundo:
 | GET    | `/`          | Health check (liveness) — **rota já existente**, muda o corpo | público |
 
 As outras 37 continuam exatamente como estão: mesma URL, mesmo método,
-mesmo status, mesmo corpo — exceto pelo `paymentRef` que sai das
-respostas de pedido, registrado acima.
+mesmo status, mesmo corpo. **Nenhuma mudança de runtime** — esta spec
+descreve o que já existe, e o único corpo que muda é o do `GET /`, que
+hoje é uma string de scaffold.
 
 ### Inventário auditado (38 rotas)
 
@@ -236,34 +269,33 @@ Uma por domínio **visto pelo consumidor**, não por pasta:
 
 ## Critérios de aceitação
 
-- [ ] Dado o app no ar, quando abro `/docs`, então vejo a Swagger UI
+- [x] Dado o app no ar, quando abro `/docs`, então vejo a Swagger UI
       com as 38 operações.
-- [ ] Dado `pnpm openapi:generate`, quando roda, então escreve
+- [x] Dado `pnpm openapi:generate`, quando roda, então escreve
       `openapi.json` válido sem abrir porta nenhuma.
-- [ ] Dado o documento gerado, quando conto operações, então são
+- [x] Dado o documento gerado, quando conto operações, então são
       exatamente 38 — e o teste falha se uma rota nova não for
       documentada.
-- [ ] Dado o documento gerado, quando olho qualquer rota **não**
+- [x] Dado o documento gerado, quando olho qualquer rota **não**
       `@Public()`, então ela declara `bearer` como requisito de
       segurança.
-- [ ] Dado o documento gerado, quando olho qualquer rota `@Public()`,
+- [x] Dado o documento gerado, quando olho qualquer rota `@Public()`,
       então ela **não** declara requisito de segurança.
-- [ ] Dado o documento gerado, quando olho uma rota com
+- [x] Dado o documento gerado, quando olho uma rota com
       `@RequirePermissions(X)`, então a descrição do `403` nomeia `X`.
-- [ ] Dado o documento gerado, quando olho `POST /payments/webhook`,
+- [x] Dado o documento gerado, quando olho `POST /payments/webhook`,
       então não há schema de corpo inventado, e o header
       `stripe-signature` está documentado como obrigatório.
-- [ ] Dado o documento gerado, quando procuro por `passwordHash`,
-      `tokenHash` ou `paymentRef`, então não encontro nenhum.
-- [ ] Dado o documento gerado, quando olho as seis rotas de `204`,
+- [x] Dado o documento gerado, quando procuro por `passwordHash` ou
+      `tokenHash`, então não encontro nenhum.
+- [x] Dado o documento gerado, quando olho as seis rotas de `204`,
       então nenhuma declara corpo de resposta.
-- [ ] Dado o documento gerado, quando olho as rotas com rate limit,
+- [x] Dado o documento gerado, quando olho as rotas com rate limit,
       então todas declaram `429`.
-- [ ] Dado `GET /`, quando chamo sem token, então recebo `200` com
+- [x] Dado `GET /`, quando chamo sem token, então recebo `200` com
       `{ status: 'ok', version, uptimeSeconds }`.
-- [ ] Dado um `GET /orders/:id` de um pedido pago, quando leio a
-      resposta, então `paymentRef` não está presente (e a suíte e2e
-      existente continua verde).
+- [x] Dado a suíte e2e existente, quando roda inteira contra este
+      branch, então continua verde — nenhuma resposta mudou de forma.
 
 ## Edge cases conhecidos
 

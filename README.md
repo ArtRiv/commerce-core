@@ -44,6 +44,25 @@ pnpm run start:dev
 pnpm run start:prod
 ```
 
+## Documentação da API
+
+Com o app no ar, a spec OpenAPI 3 completa das 38 rotas fica em:
+
+- **`/docs`** — Swagger UI, navegável, com "Authorize" pro bearer token
+- **`/docs-json`** — o documento cru
+
+Pra gerar o `openapi.json` da raiz (é ele que o front-end usa pra
+codegen de cliente) sem subir servidor, banco ou chave de API nenhuma:
+
+```bash
+pnpm run openapi:generate
+```
+
+O documento é gerado a partir dos decorators, então ele não é editado à
+mão — e um teste (`src/openapi/document.spec.ts`) falha se uma rota nova
+não aparecer nele, ou se o que ele diz sobre autenticação divergir do que
+os guards fazem. Ver [`docs/specs/openapi.md`](docs/specs/openapi.md).
+
 ## Testes
 
 ```bash
