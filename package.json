@@ -27,7 +27,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
     "prepare": "husky",
-    "openapi:generate": "nest build && node dist/src/openapi/generate.js"
+    "openapi:generate": "nest build && node dist/src/openapi/generate.js",
+    "demo:catalog": "tsx prisma/demo-catalog.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
