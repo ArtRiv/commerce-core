@@ -16,10 +16,11 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 
 import { Public } from '../auth/public.decorator';
+import { ClientIpThrottlerGuard } from '../common/throttling/client-ip-throttler.guard';
 import {
   ApiBadRequest,
   ApiRateLimited,
@@ -74,7 +75,7 @@ export class PaymentWebhookController {
   ) {}
 
   @Public()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(ClientIpThrottlerGuard)
   @Throttle({ default: RATE_LIMITS.PAYMENT_WEBHOOK })
   @HttpCode(200)
   @Post('webhook')

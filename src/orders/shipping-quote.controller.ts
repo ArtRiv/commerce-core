@@ -1,9 +1,10 @@
 import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { ClientIpThrottlerGuard } from '../common/throttling/client-ip-throttler.guard';
 import {
   ApiBadRequest,
   ApiConflict,
@@ -43,7 +44,7 @@ export class ShippingQuoteController {
    * same token there will be a carrier, and then every call is a network trip
    * and a third party's quota. Same reasoning as /orders/:id/pay.
    */
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(ClientIpThrottlerGuard)
   @Throttle({ default: RATE_LIMITS.SHIPPING_QUOTE })
   @HttpCode(200)
   @Post('quote')

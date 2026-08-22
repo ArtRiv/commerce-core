@@ -14,11 +14,18 @@ import { PrismaModule } from './prisma/prisma.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    // A baseline for any route that opts in with @UseGuards(ThrottlerGuard);
-    // the sensitive routes override it with their own @Throttle. Storage is
-    // in-memory, which means each instance counts on its own — fine for one
-    // process, wrong the day this runs behind more than one. Swapping in the
-    // Redis storage is a change here and nowhere else.
+    // A baseline for any route that opts in with
+    // @UseGuards(ClientIpThrottlerGuard); the sensitive routes override it with
+    // their own @Throttle. Storage is in-memory, which means each instance
+    // counts on its own — fine for one process, wrong the day this runs behind
+    // more than one. Swapping in the Redis storage is a change here and
+    // nowhere else.
+    //
+    // Routes use ClientIpThrottlerGuard rather than @nestjs/throttler's
+    // ThrottlerGuard because the latter keys on req.ip, which is not stable
+    // behind an edge whose forwarded chain varies in length — and an unstable
+    // key is not a weaker limit, it is no limit at all
+    // (src/common/throttling/client-ip.ts).
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
     PrismaModule,
     MailModule,

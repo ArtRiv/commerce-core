@@ -15,12 +15,13 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { PERMISSIONS } from '../auth/authz/permissions';
 import { RequirePermissions } from '../auth/authz/require-permissions.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { ClientIpThrottlerGuard } from '../common/throttling/client-ip-throttler.guard';
 import {
   ApiBadRequest,
   ApiConflict,
@@ -95,7 +96,7 @@ export class OrdersController {
    * session. Hands back the open session when there is one, rather than
    * creating a second way to charge the same buyer.
    */
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(ClientIpThrottlerGuard)
   @Throttle({ default: RATE_LIMITS.ISSUE_PAYMENT })
   @HttpCode(200)
   @Post(':id/pay')

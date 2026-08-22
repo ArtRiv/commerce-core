@@ -83,7 +83,8 @@ Laptop ──▶ Supabase DEV  ← a suíte e2e dá TRUNCATE aqui, e só aqui
 | Variável                        | Valor em produção                                | Por quê                                                                          |
 | ------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `NODE_ENV`                      | `production`                                     | Liga as duas guardas de boot. Não é opcional.                                     |
-| `TRUST_PROXY_HOPS`              | `1`                                              | Um proxy (o do Render) entre o cliente e o app. Ver invariante acima.             |
+| `TRUST_PROXY_HOPS`              | `1`                                              | Faz `req.ip` significar alguma coisa. Não é o que os limites usam — ver abaixo.   |
+| `CLIENT_IP_HEADER`              | `cf-connecting-ip`                               | O que os rate limits **de fato** chaveiam no Render. Ver "Decisões".              |
 | `DATABASE_URL`                  | pooler do Supabase **prod**                       | Session mode (`:5432`) — tem IPv4, o host direto `db.*.supabase.co` só tem IPv6.  |
 | `JWT_SECRET`                    | novo, só de produção                              | Um segredo compartilhado com o laptop não é segredo de produção.                  |
 | `RESEND_API_KEY`                | a existente                                       | —                                                                                 |
@@ -130,10 +131,15 @@ Guardas de boot:
 - [ ] Dado `TRUST_PROXY_HOPS` não definido em dev/test, quando o app
       sobe, então sobe com 0 e sem aviso — em localhost não há proxy, e
       0 ali é a resposta certa, não um substituto.
-- [ ] Dado o app publicado, quando dois clientes de IPs diferentes batem
-      numa rota com rate limit, então cada um tem seu próprio balde.
-- [ ] Dado o app publicado, quando um cliente forja `X-Forwarded-For`,
+- [x] Dado o app publicado, quando o mesmo cliente estoura o limite de uma
+      rota chaveada por IP, então recebe `429` — verificado com
+      `POST /auth/forgot-password` sem corpo (cai no fallback de IP, limite
+      3/hora).
+- [x] Dado o app publicado, quando um cliente forja `X-Forwarded-For`,
       então **não** escapa do próprio balde.
+- [x] Dado o app publicado, quando alguém erra a senha da **mesma** conta
+      repetidamente, então recebe `429` na 6ª (limite 5/15min, chaveado por
+      e-mail) — verificado em produção.
 
 Deploy:
 
@@ -173,6 +179,33 @@ Compra real (test mode, ponta a ponta, pelo endereço público):
   custo: um monitor externo (UptimeRobot, 5 min) mantém o serviço
   acordado — 750 horas/mês de free tier cobrem as ~730 horas de um mês,
   então manter **um** serviço sempre acordado cabe na cota.
+- **Contar saltos de proxy não funciona no Render; o rate limit chaveia num
+  header do edge.** `TRUST_PROXY_HOPS` parte do princípio de que a cadeia
+  `X-Forwarded-For` tem comprimento **fixo**. Medindo o serviço publicado,
+  ela não tem: com `1` e com `2` os limites por IP nunca dispararam (75
+  requisições contra um limite de 60/min; 6 contra um de 3/hora), e uma
+  varredura enviando K entradas-sentinela mostrou o `req.ip` caindo
+  **dentro** das entradas do cliente de forma intermitente a partir de K=3
+  — ou seja, o número de entradas que a plataforma acrescenta varia por
+  requisição.
+
+  O modo de falha é o pior possível: cada requisição cai num balde novo, o
+  limite deixa de existir e **nada** aparece no log. Foi o que também
+  explicou leituras contraditórias no meio do diagnóstico — o processo
+  reiniciou e zerou o storage em memória (visível pelo `uptimeSeconds` do
+  `GET /`).
+
+  A correção é parar de contar e ler um header que o **edge** escreve. Todo
+  serviço do Render fica atrás do Cloudflare, que **define**
+  `CF-Connecting-IP` a partir do socket e sobrescreve o que o cliente
+  mandar. `CLIENT_IP_HEADER` nomeia esse header em configuração em vez de
+  fixá-lo no código: sem a variável, nada muda e `req.ip` continua
+  decidindo, então dev local e a suíte e2e seguem iguais.
+
+  A premissa de segurança é que a origem **só** é alcançável pelo edge. No
+  Render isso vale. Numa plataforma onde não valer, a variável não deve ser
+  setada — ali o header vira passe livre.
+
 - **Migrations no build command, não em pre-deploy.** O pre-deploy
   command do Render exige instância paga. O build command roda com
   `DATABASE_URL` disponível, então `prisma migrate deploy` mais o seed de

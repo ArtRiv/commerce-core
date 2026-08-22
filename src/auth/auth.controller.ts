@@ -15,9 +15,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 
+import { ClientIpThrottlerGuard } from '../common/throttling/client-ip-throttler.guard';
 import {
   ApiBadRequest,
   ApiConflict,
@@ -59,7 +60,7 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Public()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(ClientIpThrottlerGuard)
   @Throttle({ default: RATE_LIMITS.REGISTER })
   @Post('register')
   @ApiOperation({
@@ -115,7 +116,7 @@ export class AuthController {
   }
 
   @Public()
-  @UseGuards(ThrottlerGuard, EmailThrottlerGuard)
+  @UseGuards(ClientIpThrottlerGuard, EmailThrottlerGuard)
   @Throttle({ default: RATE_LIMITS.LOGIN })
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -217,7 +218,7 @@ export class AuthController {
    * access token has usually expired by the time they need this.
    */
   @Public()
-  @UseGuards(ThrottlerGuard)
+  @UseGuards(ClientIpThrottlerGuard)
   @Throttle({ default: RATE_LIMITS.REFRESH })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)

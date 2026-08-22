@@ -39,11 +39,21 @@ services:
       - key: NODE_ENV
         value: production
 
-      # One proxy — Render's — between the internet and the container. Without
-      # it every caller shares one rate-limit bucket; with `true` instead of a
-      # count, a forged X-Forwarded-For buys a fresh one (src/trust-proxy.ts).
+      # Still required — it is what makes req.ip mean anything at all — but on
+      # Render it is NOT what the rate limits key on. See CLIENT_IP_HEADER.
       - key: TRUST_PROXY_HOPS
         value: 1
+
+      # What the rate limits actually key on here, and the value that made them
+      # work. Probing the deployed service showed the number of entries the
+      # edge appends to X-Forwarded-For varying per request, so no fixed hop
+      # count finds the caller: every request got its own bucket and the
+      # IP-keyed limits never fired, silently. Cloudflare — which fronts every
+      # Render service — SETS this header from the connecting socket and
+      # overwrites whatever the client sent, so it is both stable and
+      # unforgeable from outside (src/common/throttling/client-ip.ts).
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip
 
       # Real freight, not the built-in development table. Prices are reviewable
       # here rather than invisible in a dashboard.
