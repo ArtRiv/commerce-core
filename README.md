@@ -11,10 +11,10 @@ v1 pequena, testada e em produção antes de expandir.
 ## Stack
 
 - [NestJS](https://nestjs.com/) (TypeScript)
-- PostgreSQL
-- ORM: a definir (Prisma ou TypeORM)
+- PostgreSQL (Supabase), via [Prisma](https://www.prisma.io/) 7
 - Stripe, via interface própria `PaymentProvider`
-- Deploy: a definir (Railway, Render ou Fly.io)
+- [Resend](https://resend.com/) para e-mail transacional
+- Deploy: Render (Docker, free tier) — ver [`docs/deploy.md`](docs/deploy.md)
 
 ## Escopo da v1
 
@@ -62,6 +62,23 @@ O documento é gerado a partir dos decorators, então ele não é editado à
 mão — e um teste (`src/openapi/document.spec.ts`) falha se uma rota nova
 não aparecer nele, ou se o que ele diz sobre autenticação divergir do que
 os guards fazem. Ver [`docs/specs/openapi.md`](docs/specs/openapi.md).
+
+## Deploy
+
+Render (Docker, uma instância no free tier) contra um projeto Supabase
+**separado** do de desenvolvimento — a suíte e2e dá `TRUNCATE` nas
+tabelas do banco pra onde aponta, então dividir os dois seria perder a
+loja num `pnpm test:e2e` distraído.
+
+O procedimento (banco, blueprint, webhook do Stripe, verificação) está em
+[`docs/deploy.md`](docs/deploy.md); o porquê de cada escolha, incluindo
+os trade-offs aceitos do free tier, em
+[`docs/specs/deploy.md`](docs/specs/deploy.md).
+
+Fora de `development`/`test` o app **se recusa a subir** sem chaves reais
+de Stripe, sem tabela de frete e sem `TRUST_PROXY_HOPS` — três guardas
+que falham no boot com código 1 em vez de degradar em silêncio. As
+variáveis estão documentadas em [`.env.example`](.env.example).
 
 ## Testes
 

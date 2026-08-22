@@ -1,0 +1,12 @@
+# This repo is developed on Windows (core.autocrlf=true) and built on Linux.
+#
+# Shell scripts must arrive in the image with LF endings. A CRLF entrypoint.sh
+# makes the kernel read the shebang as `/bin/sh\r` and the container dies with
+# "no such file or directory" naming an interpreter that plainly exists — one
+# of the more confusing ways a deploy can fail, and one that only shows up in
+# the deployed environment.
+*.sh text eol=lf
+
+# Same argument, one layer up: these configure or become the image.
+Dockerfile text eol=lf
+.dockerignore text eol=lf

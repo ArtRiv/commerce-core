@@ -413,7 +413,7 @@ nenhuma estrutura a mais:
     "code": "padrao-sudeste",
     "label": "Entrega padrão",
     "prefixes": ["0", "1", "2", "3"],
-    "etaDays": 5,
+    "estimatedDays": 5,
     "rates": [
       { "upToGrams": 1000, "priceCents": 1990 },
       { "upToGrams": 30000, "priceCents": 3990 }
@@ -423,7 +423,7 @@ nenhuma estrutura a mais:
     "code": "padrao-brasil",
     "label": "Entrega padrão",
     "prefixes": ["4", "5", "6", "7", "8", "9"],
-    "etaDays": 10,
+    "estimatedDays": 10,
     "rates": [{ "upToGrams": 30000, "priceCents": 4990 }]
   }
 ]
