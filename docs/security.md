@@ -50,6 +50,21 @@ Sheet e o Session Management Cheat Sheet.
   hardening posterior.
 - Resposta de limite excedido é `429` com header `Retry-After`, sem
   detalhar o motivo além do óbvio.
+- **Rotas sensíveis são limitadas por duas chaves, não uma**: por IP (uma
+  origem varrendo muitas contas) e por e-mail do corpo (muitas origens
+  martelando uma conta). As duas juntas, porque cada uma sozinha tem um
+  furo óbvio — IP some atrás de um pool de proxy, e-mail some quando o
+  alvo muda.
+- **A chave de IP não pode sair de contagem de saltos atrás de um CDN.**
+  `req.ip` depende de a cadeia `X-Forwarded-For` ter comprimento fixo, e
+  atrás de um edge ela não tem — medido em produção, o limite por IP
+  simplesmente não disparava, sem nada no log. Onde houver um CDN que
+  escreva o IP real num header próprio (`CF-Connecting-IP` no
+  Cloudflare), a chave sai de lá, via `CLIENT_IP_HEADER`. Isso só é
+  seguro enquanto a origem for inalcançável exceto pelo edge — o header
+  é confiável porque o edge o **sobrescreve**, não porque tem um nome
+  bonito. Detalhes e as medições em
+  [`specs/deploy.md`](specs/deploy.md).
 
 ## Enumeração de contas
 
