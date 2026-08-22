@@ -133,6 +133,32 @@ servir tráfego, então por alguns segundos o código antigo fala com o
 schema novo. Todas as migrations até hoje são aditivas. A primeira que
 não for tem que virar duas (expand, depois contract).
 
+### O deploy falha com `P1001: Can't reach database server`
+
+Olhar o host que o Prisma imprime na linha de cima do erro:
+
+```
+Datasource "db": PostgreSQL database "postgres", schema "public" at "db.<ref>.supabase.co:5432"
+                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+Se for `db.<ref>.supabase.co`, o `DATABASE_URL` está com a **Direct
+connection**. Esse host não publica registro A — só AAAA — e o Render não
+tem egress IPv6, então a conexão nunca sai. Trocar pelo **Session
+pooler**:
+
+```
+postgresql://postgres.<ref>:<senha>@aws-N-<região>.pooler.supabase.com:5432/postgres
+```
+
+Conferir também o `<ref>`: tem que ser o do projeto de **produção**. O
+mesmo erro com o ref do projeto de desenvolvimento significa que o valor
+foi copiado do `.env` local — que é justamente o banco que a suíte e2e
+trunca.
+
+Porta 5432 (session), não 6543 (transaction): migration precisa de
+sessão.
+
 ### Trocar um segredo
 
 Dashboard do Render → Environment. Salvar redeploya. `JWT_SECRET` é o

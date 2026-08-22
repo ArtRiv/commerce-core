@@ -42,6 +42,17 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Prisma's schema engine — the Rust binary behind `migrate deploy` — probes for
+# libssl and, on a -slim image, finds nothing to probe. It then warns twice per
+# deploy that it is "defaulting to openssl-1.1.x" and "may not work as
+# expected". It happens to work anyway, which is the problem: a warning that
+# always appears and never means anything is a warning nobody reads, and the
+# day it does matter it will scroll past with the rest. ~5 MB to make the
+# deploy log say only what is true.
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
+
 # node_modules arrives whole, dev dependencies included, and that is deliberate
 # rather than sloppy. The entrypoint runs `prisma migrate deploy` (the `prisma`
 # CLI is a dev dependency) and dist/prisma/seed.js opens with
