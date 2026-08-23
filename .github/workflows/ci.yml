@@ -2,7 +2,7 @@
 #
 # Deliberately not the whole test pyramid. This job runs only what needs no
 # secrets and no database, which is what keeps it near two minutes and green on
-# a fresh clone. The 125 e2e tests are absent on purpose: they need a real
+# a fresh clone. The 161 e2e tests are absent on purpose: they need a real
 # Postgres, and pointing them at the Supabase instance this project develops
 # against would TRUNCATE the developer's own tables mid-run. When they do land
 # here they get their own ephemeral service container, as a second job.
@@ -74,7 +74,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # 402 unit tests, ~20s, no environment variables required. Includes
+      # 440 unit tests, ~20s, no environment variables required. Includes
       # src/openapi/document.spec.ts, which boots the module graph in preview
       # mode and asserts the published document still agrees with the guards.
       - name: Unit tests
