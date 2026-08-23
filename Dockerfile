@@ -19,6 +19,16 @@ WORKDIR /app
 # non-interactive shell, it fails the build.
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
+# openssl HERE as well as in the runtime stage, and that symmetry is the whole
+# point: Prisma picks its engine build from the libssl it detects. With openssl
+# missing here and present there, `prisma generate` resolves one target at build
+# time and the CLI asks for a different one at run time — then tries to download
+# it into node_modules, which the unprivileged user cannot write to. Same
+# packages in both stages, same engine, nothing to fetch later.
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
+
 # corepack ships with Node and reads packageManager out of package.json, so the
 # pnpm version here is the one the lockfile was written by. Copying only the
 # manifests first keeps the install layer cached across source-only changes.
@@ -59,21 +69,27 @@ RUN apt-get update -y \
 # `require('dotenv/config')` (likewise). Pruning would save perhaps 150 MB and
 # buy a class of failure — "works locally, missing module in production" — that
 # can only be discovered on a platform with no shell to look with.
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/dist ./dist
 
 # The Prisma CLI needs both: the migrations to apply, and prisma.config.ts,
 # which is where the datasource URL comes from (the schema's datasource block
 # deliberately declares no `url`).
-COPY --from=build /app/prisma ./prisma
-COPY --from=build /app/prisma.config.ts ./prisma.config.ts
+COPY --from=build --chown=node:node /app/prisma ./prisma
+COPY --from=build --chown=node:node /app/prisma.config.ts ./prisma.config.ts
 COPY package.json ./
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Drop root. The image writes nothing outside /tmp, so the unprivileged `node`
-# user that the base image already ships is enough.
+# Drop root, running as the unprivileged `node` user the base image ships.
+#
+# This used to be justified with "the image writes nothing outside /tmp", which
+# was wrong and cost a broken deploy: the Prisma CLI writes into
+# node_modules/@prisma/engines when the engine it wants is not already there.
+# The --chown above is what makes that possible rather than a crash loop, and
+# installing openssl in BOTH stages is what makes it unnecessary in the first
+# place. Keep both — the chown is the safety net, the symmetry is the fix.
 USER node
 
 # Documentation only — Render injects PORT and main.ts reads it.
