@@ -20,6 +20,10 @@ convenções combinadas para trabalhar com o Claude Code neste repo.
   API em si: como o documento OpenAPI é montado, por que a permissão de
   cada rota sai do mesmo decorator que a impõe, e o inventário auditado
   das 38 rotas (com as divergências spec ↔ código que a auditoria achou).
+- [`status.md`](status.md) — o retrato do projeto: o que está no ar, o que
+  a v1 entrega, o que ficou de fora de propósito, e o que quem for
+  **consumir** esta API precisa saber antes de escrever a primeira
+  requisição. Comece por aqui.
 - [`deploy.md`](deploy.md) — runbook de produção: como o serviço no
   Render, o Supabase de produção e o webhook do Stripe são criados, o que
   fazer numa migration nova e o que muda no dia em que houver uma segunda
