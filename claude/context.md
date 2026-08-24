@@ -47,6 +47,34 @@ projeto. Ainda assim:
 - Deploy real (Railway, Render ou Fly.io) — este é o critério de
   sucesso da v1, não é opcional
 
+## Modelo de reuso: um repositório, N implantações
+
+Este projeto não é o backend de **uma** loja — é o backend que eu
+pretendo reusar toda vez que fizer um e-commerce novo. Cada loja é uma
+**implantação própria** da mesma `main`: banco próprio, conta Stripe
+própria, domínio de e-mail próprio. Nenhuma sabe que as outras existem.
+O passo a passo está em [`../docs/new-store.md`](../docs/new-store.md).
+
+Isso **não** é a multi-tenancy que está fora de escopo abaixo. Aquilo é
+uma instância servindo várias lojas, com `storeId` em toda tabela e em
+toda query — onde um `WHERE` esquecido vaza pedido de uma loja na outra.
+Aqui o isolamento é físico e sai de graça.
+
+**A regra que mantém isso vivo — e é a única que importa:**
+
+> Nunca forkar. Toda loja implanta a `main` deste repositório. Se uma
+> loja precisa de algo que o commerce-core não tem, isso vira um PR
+> **aqui**, e a próxima loja já nasce com aquilo. Diferença entre lojas
+> só existe em **configuração**.
+
+O primeiro `if (loja === 'x')` no código é o momento em que isto deixa de
+ser um template e vira dois projetos que divergem até nenhum dos dois
+ser reusável. Template não morre de arquitetura ruim, morre de disciplina.
+
+Corolário prático: generalidade não se inventa antes da hora. Feature
+entra quando uma loja real precisa dela, não porque "alguma loja um dia
+pode querer".
+
 ## Fora do escopo da v1 (fica para depois)
 
 - Multi-tenancy (múltiplas lojas isoladas na mesma instância)

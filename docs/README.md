@@ -24,6 +24,15 @@ convenções combinadas para trabalhar com o Claude Code neste repo.
   a v1 entrega, o que ficou de fora de propósito, e o que quem for
   **consumir** esta API precisa saber antes de escrever a primeira
   requisição. Comece por aqui.
+- [`new-store.md`](new-store.md) — subindo uma **loja nova**: que contas
+  criar (Supabase, Stripe, Resend, Render), em que ordem, o que é por
+  loja e o que é compartilhado, e o custo real de cada instância. O
+  modelo de reuso está em [`../claude/context.md`](../claude/context.md).
+- [`frontend-integration.md`](frontend-integration.md) — o contrato para
+  quem vai construir um front-end contra esta API, em outro repositório.
+  Feito para ser **copiado** para lá: é autocontido, e cobre o ciclo dos
+  tokens, o fluxo de compra, a convenção de erros e as armadilhas (o
+  webhook é a verdade sobre o pagamento, não o redirect).
 - [`deploy.md`](deploy.md) — runbook de produção: como o serviço no
   Render, o Supabase de produção e o webhook do Stripe são criados, o que
   fazer numa migration nova e o que muda no dia em que houver uma segunda
