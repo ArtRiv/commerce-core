@@ -256,6 +256,202 @@ describe('Catalog (e2e)', () => {
     });
   });
 
+  describe('GET /products — ordering and price range', () => {
+    async function threeActive(): Promise<void> {
+      await createProduct({
+        name: 'Bone Aba Curva',
+        priceCents: 11990,
+        status: ProductStatus.ACTIVE,
+      });
+      await createProduct({
+        name: 'Camiseta Pesada',
+        priceCents: 14990,
+        status: ProductStatus.ACTIVE,
+      });
+      await createProduct({
+        name: 'Alfaiataria Preta',
+        priceCents: 34990,
+        status: ProductStatus.ACTIVE,
+      });
+    }
+
+    function slugsOf(body: unknown): string[] {
+      return (body as { items: { slug: string }[] }).items.map((p) => p.slug);
+    }
+
+    it('defaults to newest first', async () => {
+      await threeActive();
+
+      const response = await http().get('/products').expect(200);
+
+      expect(slugsOf(response.body)).toEqual([
+        'alfaiataria-preta',
+        'camiseta-pesada',
+        'bone-aba-curva',
+      ]);
+    });
+
+    it('sorts by price ascending and descending', async () => {
+      await threeActive();
+
+      const asc = await http().get('/products?sort=price_asc').expect(200);
+      expect(slugsOf(asc.body)).toEqual([
+        'bone-aba-curva',
+        'camiseta-pesada',
+        'alfaiataria-preta',
+      ]);
+
+      const desc = await http().get('/products?sort=price_desc').expect(200);
+      expect(slugsOf(desc.body)).toEqual([
+        'alfaiataria-preta',
+        'camiseta-pesada',
+        'bone-aba-curva',
+      ]);
+    });
+
+    it('sorts by name', async () => {
+      await threeActive();
+
+      const response = await http().get('/products?sort=name_asc').expect(200);
+
+      expect(slugsOf(response.body)).toEqual([
+        'alfaiataria-preta',
+        'bone-aba-curva',
+        'camiseta-pesada',
+      ]);
+    });
+
+    it('rejects an unknown sort', async () => {
+      await http().get('/products?sort=cheapest').expect(400);
+    });
+
+    it('never repeats or drops an item when prices tie', async () => {
+      // Three products at the same price: without the id tiebreaker the two
+      // single-item pages can hand back the same row twice.
+      await createProduct({
+        name: 'Pesada Preta',
+        priceCents: 14990,
+        status: ProductStatus.ACTIVE,
+      });
+      await createProduct({
+        name: 'Pesada Areia',
+        priceCents: 14990,
+        status: ProductStatus.ACTIVE,
+      });
+      await createProduct({
+        name: 'Pesada Off White',
+        priceCents: 14990,
+        status: ProductStatus.ACTIVE,
+      });
+
+      const seen: string[] = [];
+      for (const page of [1, 2, 3]) {
+        const response = await http()
+          .get(`/products?sort=price_asc&perPage=1&page=${String(page)}`)
+          .expect(200);
+        seen.push(...slugsOf(response.body));
+      }
+
+      expect(new Set(seen).size).toBe(3);
+    });
+
+    it('bounds the catalogue by price, inclusively', async () => {
+      await threeActive();
+
+      const min = await http().get('/products?minPriceCents=14990').expect(200);
+      expect(slugsOf(min.body).sort()).toEqual([
+        'alfaiataria-preta',
+        'camiseta-pesada',
+      ]);
+
+      const max = await http().get('/products?maxPriceCents=14990').expect(200);
+      expect(slugsOf(max.body).sort()).toEqual([
+        'bone-aba-curva',
+        'camiseta-pesada',
+      ]);
+
+      const both = await http()
+        .get('/products?minPriceCents=12000&maxPriceCents=20000')
+        .expect(200);
+      expect(slugsOf(both.body)).toEqual(['camiseta-pesada']);
+    });
+
+    it('reports total for the filtered catalogue, not the page', async () => {
+      await threeActive();
+
+      const response = await http()
+        .get('/products?minPriceCents=12000&perPage=1')
+        .expect(200);
+      const body = response.body as { items: unknown[]; total: number };
+
+      expect(body.items).toHaveLength(1);
+      expect(body.total).toBe(2);
+    });
+
+    it('400s an impossible price range instead of returning nothing', async () => {
+      await http()
+        .get('/products?minPriceCents=20000&maxPriceCents=10000')
+        .expect(400);
+    });
+
+    it('does not let a price filter reveal a DRAFT product', async () => {
+      await createProduct({ name: 'Rascunho Caro', priceCents: 99900 });
+
+      const response = await http()
+        .get('/products?minPriceCents=1')
+        .expect(200);
+
+      expect(slugsOf(response.body)).toEqual([]);
+    });
+  });
+
+  describe('GET /categories — productCount', () => {
+    it('counts only ACTIVE products', async () => {
+      const category = await createCategory('Camisetas');
+      await createProduct({
+        name: 'Ativa',
+        status: ProductStatus.ACTIVE,
+        categoryIds: [category.id],
+      });
+      await createProduct({
+        name: 'Rascunho',
+        categoryIds: [category.id],
+      });
+
+      const response = await http().get('/categories').expect(200);
+      const [body] = response.body as { slug: string; productCount: number }[];
+
+      expect(body).toMatchObject({ slug: 'camisetas', productCount: 1 });
+    });
+
+    it('reports an empty category as zero', async () => {
+      await createCategory('Acessorios');
+
+      const response = await http().get('/categories').expect(200);
+      const [body] = response.body as { productCount: number }[];
+
+      expect(body.productCount).toBe(0);
+    });
+
+    it('counts a product once in each of its categories', async () => {
+      const shirts = await createCategory('Camisetas');
+      const sale = await createCategory('Promocao');
+      await createProduct({
+        name: 'Dupla',
+        status: ProductStatus.ACTIVE,
+        categoryIds: [shirts.id, sale.id],
+      });
+
+      const response = await http().get('/categories').expect(200);
+      const body = response.body as { slug: string; productCount: number }[];
+
+      expect(body.map((c) => [c.slug, c.productCount]).sort()).toEqual([
+        ['camisetas', 1],
+        ['promocao', 1],
+      ]);
+    });
+  });
+
   describe('GET /products/:idOrSlug', () => {
     it('serves an ACTIVE product to anyone, by slug', async () => {
       await createProduct({ name: 'Pública', status: ProductStatus.ACTIVE });

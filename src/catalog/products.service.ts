@@ -35,9 +35,50 @@ export interface ListProductsInput {
    * default, ACTIVE only.
    */
   status?: ProductStatus | 'all';
+  /** Defaults to 'newest', which is the ordering this endpoint always had. */
+  sort?: ProductSort;
+  /** Inclusive, integer cents. */
+  minPriceCents?: number;
+  /** Inclusive, integer cents. */
+  maxPriceCents?: number;
 }
 
 const MAX_PER_PAGE = 100;
+
+/**
+ * The orderings GET /products offers. Sorting and pagination are one feature:
+ * an ORDER BY applied after the LIMIT sorts the page, not the catalogue, so a
+ * client that sorts what it was handed is only correct while the whole
+ * catalogue fits in one page.
+ */
+export const PRODUCT_SORTS = [
+  'newest',
+  'price_asc',
+  'price_desc',
+  'name_asc',
+] as const;
+
+export type ProductSort = (typeof PRODUCT_SORTS)[number];
+
+/**
+ * Every ordering ends in id asc. Without a tiebreaker two products with the
+ * same price can swap places between two queries, and pagination then shows
+ * one twice and hides the other.
+ */
+const ORDER_BY: Record<
+  ProductSort,
+  {
+    createdAt?: 'asc' | 'desc';
+    priceCents?: 'asc' | 'desc';
+    name?: 'asc' | 'desc';
+    id?: 'asc';
+  }[]
+> = {
+  newest: [{ createdAt: 'desc' }, { id: 'asc' }],
+  price_asc: [{ priceCents: 'asc' }, { id: 'asc' }],
+  price_desc: [{ priceCents: 'desc' }, { id: 'asc' }],
+  name_asc: [{ name: 'asc' }, { id: 'asc' }],
+};
 
 /**
  * Join rows travel as {category: {...}} — flatten so callers see categories,
@@ -88,6 +129,23 @@ export class ProductsService {
     const page = query.page ?? 1;
     const perPage = Math.min(query.perPage ?? 20, MAX_PER_PAGE);
 
+    // An impossible range is the caller's bug. Returning [] would hide it
+    // behind a result that looks like "nothing matched".
+    if (
+      query.minPriceCents !== undefined &&
+      query.maxPriceCents !== undefined &&
+      query.minPriceCents > query.maxPriceCents
+    ) {
+      throw new BadRequestException(
+        'minPriceCents cannot be greater than maxPriceCents',
+      );
+    }
+
+    const priceCents =
+      query.minPriceCents !== undefined || query.maxPriceCents !== undefined
+        ? { gte: query.minPriceCents, lte: query.maxPriceCents }
+        : undefined;
+
     const where = {
       // No status requested = the public storefront view. 'all' = no filter,
       // reserved for viewers the controller already cleared for products.read.
@@ -101,13 +159,14 @@ export class ProductsService {
       name: query.search
         ? { contains: query.search, mode: 'insensitive' as const }
         : undefined,
+      priceCents,
     };
 
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.product.findMany({
         where,
         include: CATEGORY_INCLUDE,
-        orderBy: { createdAt: 'desc' },
+        orderBy: ORDER_BY[query.sort ?? 'newest'],
         skip: (page - 1) * perPage,
         take: perPage,
       }),
