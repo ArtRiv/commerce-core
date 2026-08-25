@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { ProductStatus } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { nextAvailableSlug, slugify } from './slug';
 
@@ -19,6 +20,31 @@ export interface CategoryInput {
  * is no history to preserve. Deleting one detaches its products via the join
  * table's cascade; the products survive.
  */
+/**
+ * Only ACTIVE products count. The storefront's category rail sits next to a
+ * grid that shows ACTIVE only — a rail reading "Camisetas (5)" above three
+ * visible pieces is worse than no number at all.
+ */
+const ACTIVE_PRODUCT_COUNT = {
+  _count: {
+    select: {
+      products: { where: { product: { status: ProductStatus.ACTIVE } } },
+    },
+  },
+} as const;
+
+interface WithProductCount {
+  _count: { products: number };
+}
+
+/** Turn Prisma's _count shape into the flat field the response declares. */
+function withProductCount<T extends WithProductCount>({
+  _count,
+  ...category
+}: T) {
+  return { ...category, productCount: _count.products };
+}
+
 @Injectable()
 export class CategoriesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -31,20 +57,26 @@ export class CategoriesService {
     });
   }
 
-  findAll() {
-    return this.prisma.category.findMany({ orderBy: { name: 'asc' } });
+  async findAll() {
+    const rows = await this.prisma.category.findMany({
+      orderBy: { name: 'asc' },
+      include: ACTIVE_PRODUCT_COUNT,
+    });
+
+    return rows.map(withProductCount);
   }
 
   async findBySlug(slug: string) {
     const category = await this.prisma.category.findUnique({
       where: { slug },
+      include: ACTIVE_PRODUCT_COUNT,
     });
 
     if (!category) {
       throw new NotFoundException('Category not found');
     }
 
-    return category;
+    return withProductCount(category);
   }
 
   async update(id: string, input: Partial<CategoryInput>) {

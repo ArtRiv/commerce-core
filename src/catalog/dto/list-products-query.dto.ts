@@ -10,6 +10,7 @@ import {
 } from 'class-validator';
 
 import { ProductStatus } from '../../generated/prisma/enums';
+import { PRODUCT_SORTS, type ProductSort } from '../products.service';
 
 /**
  * Everything a query string can say to GET /products. Numbers need the
@@ -65,4 +66,41 @@ export class ListProductsQueryDto {
   @IsOptional()
   @IsIn([...Object.values(ProductStatus), 'all'])
   status?: ProductStatus | 'all';
+
+  /**
+   * Ordering is the server's job: sorting a page is not sorting a catalogue.
+   * Omitted means `newest`, the ordering this endpoint has always had.
+   */
+  @ApiPropertyOptional({
+    enum: PRODUCT_SORTS,
+    default: 'newest',
+    description:
+      'Ordering, applied before pagination. Omit for `newest` (createdAt desc), the historical default. Every ordering breaks ties on id so pages never repeat or drop an item.',
+  })
+  @IsOptional()
+  @IsIn(PRODUCT_SORTS)
+  sort?: ProductSort;
+
+  /** Inclusive. Integer cents, like every other money field. */
+  @ApiPropertyOptional({
+    minimum: 0,
+    description:
+      'Inclusive lower bound, integer cents. Greater than `maxPriceCents` is a 400, not an empty list.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  minPriceCents?: number;
+
+  /** Inclusive. Integer cents, like every other money field. */
+  @ApiPropertyOptional({
+    minimum: 0,
+    description: 'Inclusive upper bound, integer cents.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  maxPriceCents?: number;
 }

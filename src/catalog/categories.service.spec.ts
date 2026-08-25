@@ -38,6 +38,14 @@ function createPrismaMock() {
   };
 }
 
+/** What Prisma returns once ACTIVE_PRODUCT_COUNT is included. */
+function countedRow(
+  overrides: Partial<CategoryRow> = {},
+  products = 0,
+): CategoryRow & { _count: { products: number } } {
+  return { ...categoryRow(overrides), _count: { products } };
+}
+
 type PrismaMock = ReturnType<typeof createPrismaMock>;
 
 function serviceWith(prisma: PrismaMock): CategoriesService {
@@ -97,6 +105,18 @@ describe('CategoriesService', () => {
   });
 
   describe('findBySlug', () => {
+    it('carries productCount too', async () => {
+      const prisma = createPrismaMock();
+      prisma.category.findUnique.mockResolvedValue(
+        countedRow({ slug: 'camisetas' }, 3),
+      );
+
+      const category = await serviceWith(prisma).findBySlug('camisetas');
+
+      expect(category).toMatchObject({ slug: 'camisetas', productCount: 3 });
+      expect(category).not.toHaveProperty('_count');
+    });
+
     it('404s when the slug matches nothing', async () => {
       const prisma = createPrismaMock();
       prisma.category.findUnique.mockResolvedValue(null);
@@ -142,6 +162,55 @@ describe('CategoriesService', () => {
       await serviceWith(prisma).update('category-1', { slug: 'camisetas' });
 
       expect(prisma.category.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('findAll', () => {
+    it('counts only ACTIVE products', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findAll();
+
+      const [args] = prisma.category.findMany.mock.calls[0] as [
+        { include?: { _count?: { select?: { products?: unknown } } } },
+      ];
+      // A rail reading "Camisetas (5)" over a grid of three is worse than no
+      // number, so the count has to match what the storefront actually shows.
+      expect(args.include?._count?.select?.products).toEqual({
+        where: { product: { status: 'ACTIVE' } },
+      });
+    });
+
+    it('flattens the count into productCount', async () => {
+      const prisma = createPrismaMock();
+      prisma.category.findMany.mockResolvedValue([
+        countedRow({ slug: 'camisetas' }, 5),
+      ] as never);
+
+      const [category] = await serviceWith(prisma).findAll();
+
+      expect(category).toMatchObject({ slug: 'camisetas', productCount: 5 });
+      expect(category).not.toHaveProperty('_count');
+    });
+
+    it('reports an empty category as zero, not as a missing field', async () => {
+      const prisma = createPrismaMock();
+      prisma.category.findMany.mockResolvedValue([countedRow({}, 0)] as never);
+
+      const [category] = await serviceWith(prisma).findAll();
+
+      expect(category.productCount).toBe(0);
+    });
+
+    it('sorts categories by name', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findAll();
+
+      const [args] = prisma.category.findMany.mock.calls[0] as [
+        { orderBy?: unknown },
+      ];
+      expect(args.orderBy).toEqual({ name: 'asc' });
     });
   });
 

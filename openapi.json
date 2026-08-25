@@ -597,6 +597,42 @@
                 "all"
               ]
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Ordering, applied before pagination. Omit for `newest` (createdAt desc), the historical default. Every ordering breaks ties on id so pages never repeat or drop an item.",
+            "schema": {
+              "default": "newest",
+              "type": "string",
+              "enum": [
+                "newest",
+                "price_asc",
+                "price_desc",
+                "name_asc"
+              ]
+            }
+          },
+          {
+            "name": "minPriceCents",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive lower bound, integer cents. Greater than `maxPriceCents` is a 400, not an empty list.",
+            "schema": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "maxPriceCents",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive upper bound, integer cents.",
+            "schema": {
+              "minimum": 0,
+              "type": "number"
+            }
           }
         ],
         "responses": {
@@ -3110,6 +3146,11 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "productCount": {
+            "type": "number",
+            "description": "How many ACTIVE products sit in this category. Counts what the storefront grid shows, so DRAFT and ARCHIVED are excluded even for a caller holding products.read. Zero, never null, for an empty category.",
+            "example": 5
           }
         },
         "required": [
@@ -3118,7 +3159,8 @@
           "slug",
           "description",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "productCount"
         ]
       },
       "CreateCategoryDto": {

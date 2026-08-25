@@ -213,6 +213,121 @@ describe('ProductsService', () => {
       });
     });
 
+    it('orders by newest, tiebroken on id, when no sort is asked for', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findMany({});
+
+      const [args] = prisma.product.findMany.mock.calls[0] as [
+        { orderBy: unknown },
+      ];
+      expect(args.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'asc' }]);
+    });
+
+    it.each([
+      ['price_asc', { priceCents: 'asc' }],
+      ['price_desc', { priceCents: 'desc' }],
+      ['name_asc', { name: 'asc' }],
+      ['newest', { createdAt: 'desc' }],
+    ] as const)('orders by %s', async (sort, primary) => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findMany({ sort });
+
+      const [args] = prisma.product.findMany.mock.calls[0] as [
+        { orderBy: unknown[] },
+      ];
+      // The id tiebreaker is what stops two equally-priced products from
+      // swapping places between pages.
+      expect(args.orderBy).toEqual([primary, { id: 'asc' }]);
+    });
+
+    it('leaves price unfiltered when neither bound is given', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findMany({});
+
+      const [args] = prisma.product.findMany.mock.calls[0] as [
+        { where: { priceCents?: unknown } },
+      ];
+      expect(args.where.priceCents).toBeUndefined();
+    });
+
+    it('bounds price on the low side only', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findMany({ minPriceCents: 15000 });
+
+      const [args] = prisma.product.findMany.mock.calls[0] as [
+        { where: { priceCents?: unknown } },
+      ];
+      expect(args.where.priceCents).toEqual({ gte: 15000, lte: undefined });
+    });
+
+    it('bounds price on the high side only', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findMany({ maxPriceCents: 15000 });
+
+      const [args] = prisma.product.findMany.mock.calls[0] as [
+        { where: { priceCents?: unknown } },
+      ];
+      expect(args.where.priceCents).toEqual({ gte: undefined, lte: 15000 });
+    });
+
+    it('bounds price on both sides, inclusive', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findMany({
+        minPriceCents: 10000,
+        maxPriceCents: 20000,
+      });
+
+      const [args] = prisma.product.findMany.mock.calls[0] as [
+        { where: { priceCents?: unknown } },
+      ];
+      expect(args.where.priceCents).toEqual({ gte: 10000, lte: 20000 });
+    });
+
+    it('accepts an equal min and max, because the bounds are inclusive', async () => {
+      const prisma = createPrismaMock();
+
+      await expect(
+        serviceWith(prisma).findMany({
+          minPriceCents: 14990,
+          maxPriceCents: 14990,
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('rejects an impossible range instead of returning nothing', async () => {
+      const prisma = createPrismaMock();
+
+      // An empty list would read as "nothing matched" and hide the caller's bug.
+      await expect(
+        serviceWith(prisma).findMany({
+          minPriceCents: 20000,
+          maxPriceCents: 10000,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.product.findMany).not.toHaveBeenCalled();
+    });
+
+    it('applies the price bound to the count as well as the page', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).findMany({ minPriceCents: 15000 });
+
+      const [countArgs] = prisma.product.count.mock.calls[0] as [
+        { where: { priceCents?: unknown } },
+      ];
+      // total must describe the filtered catalogue, not the unfiltered one.
+      expect(countArgs.where.priceCents).toEqual({
+        gte: 15000,
+        lte: undefined,
+      });
+    });
+
     it('paginates with skip/take and clamps perPage at 100', async () => {
       const prisma = createPrismaMock();
 

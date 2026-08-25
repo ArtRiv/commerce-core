@@ -21,6 +21,13 @@ export class CategoryResponse {
 
   @ApiProperty({ type: String, format: 'date-time' })
   updatedAt: Date;
+
+  @ApiProperty({
+    description:
+      'How many ACTIVE products sit in this category. Counts what the storefront grid shows, so DRAFT and ARCHIVED are excluded even for a caller holding products.read. Zero, never null, for an empty category.',
+    example: 5,
+  })
+  productCount: number;
 }
 
 /** The slice of a category that travels inside a product. */
