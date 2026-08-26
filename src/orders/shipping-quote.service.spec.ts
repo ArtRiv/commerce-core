@@ -27,7 +27,7 @@ function cartItem(
   weightGrams: number | null = null,
 ): CartView['items'][number] {
   return {
-    productId,
+    variantId: `${productId}-m`,
     quantity,
     product: {
       id: productId,
@@ -35,8 +35,13 @@ function cartItem(
       slug: productId,
       priceCents,
       status: ProductStatus.ACTIVE,
-      stockQuantity: 10,
       weightGrams,
+    },
+    variant: {
+      id: `${productId}-m`,
+      label: 'M',
+      position: 1,
+      stockQuantity: 10,
     },
   };
 }

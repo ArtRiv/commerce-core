@@ -1,0 +1,51 @@
+/// The sellable unit. A shirt is not one item with one stock count — it is
+/// five (P, M, G, GG, XGG), each with its own, and the storefront has to be
+/// able to say "this size exists and is sold out", which is a different
+/// statement from "this size does not exist".
+///
+/// Every product has AT LEAST ONE variant, always. Products that predate this
+/// table were given one labelled `Único` by the migration, carrying the stock
+/// they had, and a product created without variants gets the same. That rule
+/// is what stops there ever being two code paths — "product with variants" and
+/// "product without" — which is how this becomes unmaintainable.
+///
+/// No price here on purpose: a shirt costs the same in P and in XGG, and
+/// per-variant pricing is a nullable column plus a `??` on the day a real
+/// store needs it. See docs/specs/product-variants.md.
+model ProductVariant {
+  id String @id @default(uuid())
+
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// 'P' | 'M' | 'G' | 'GG' | 'XGG' | 'Único'. Free text rather than an enum:
+  /// shoe numbering and ring sizes are the same idea in another alphabet, and
+  /// an enum would mean a migration per new store.
+  label String
+
+  /// Display order, explicit because alphabetical is wrong: P/M/G/GG/XGG sorts
+  /// to G, GG, M, P, XGG, which is nobody's idea of size order. Every read
+  /// orders by position asc, id asc — the id tiebreaker for the same reason
+  /// the catalogue's sorts have one (docs/specs/catalog-query.md).
+  position Int
+
+  /// Stock lives HERE and nowhere else. The products table lost its column
+  /// rather than keeping a denormalized sum: a second place for stock to live
+  /// is a second place for it to be wrong, and the day the two disagree the
+  /// store sells what it does not have. Never negative — decrements are a
+  /// conditional UPDATE in StockService, so a race for the last unit is
+  /// settled by Postgres.
+  stockQuantity Int @default(0) @map("stock_quantity")
+
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  /// Two variants labelled `M` on one shirt is ambiguity with no correct
+  /// reading.
+  @@unique([productId, label])
+  @@index([productId, position])
+  @@map("product_variants")
+}

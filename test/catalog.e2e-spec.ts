@@ -76,24 +76,50 @@ describe('Catalog (e2e)', () => {
     return (response.body as { accessToken: string }).accessToken;
   }
 
+  interface ProductVariant {
+    id: string;
+    label: string;
+    position: number;
+    stockQuantity: number;
+  }
+
   interface ProductResponse {
     id: string;
     slug: string;
     status: ProductStatus;
+    /** The SUM across variants, computed on read. */
     stockQuantity: number;
+    variants: ProductVariant[];
     categories: { id: string; name: string; slug: string }[];
   }
 
+  /**
+   * A product with one size unless told otherwise. `stockQuantity` here fills
+   * that single variant: there is no stock column on a product any more
+   * (docs/specs/product-variants.md).
+   */
   async function createProduct(
     overrides: Record<string, unknown> = {},
   ): Promise<ProductResponse> {
+    const { stockQuantity = 0, ...rest } = overrides;
+
     const response = await http()
       .post('/products')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Camiseta Azul', priceCents: 4990, ...overrides })
+      .send({
+        name: 'Camiseta Azul',
+        priceCents: 4990,
+        variants: [{ label: 'Único', stockQuantity }],
+        ...rest,
+      })
       .expect(201);
 
     return response.body as ProductResponse;
+  }
+
+  /** The only variant of a single-size product — what most tests want. */
+  function onlyVariant(product: ProductResponse): string {
+    return product.variants[0].id;
   }
 
   async function createCategory(name: string): Promise<{ id: string }> {
@@ -499,24 +525,27 @@ describe('Catalog (e2e)', () => {
     });
   });
 
-  describe('PATCH /products/:id/stock', () => {
-    it('sets the absolute quantity', async () => {
+  describe('PATCH /products/:id/variants/:variantId/stock', () => {
+    it('sets the absolute quantity on the size, and the product sums it', async () => {
       const product = await createProduct({ stockQuantity: 5 });
 
       const response = await http()
-        .patch(`/products/${product.id}/stock`)
+        .patch(`/products/${product.id}/variants/${onlyVariant(product)}/stock`)
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ quantity: 12 })
         .expect(200);
 
-      expect(response.body).toEqual({ id: product.id, stockQuantity: 12 });
+      const body = response.body as ProductResponse;
+      expect(body.variants[0].stockQuantity).toBe(12);
+      // The product's own number is derived, never stored.
+      expect(body.stockQuantity).toBe(12);
     });
 
     it('rejects a negative quantity', async () => {
       const product = await createProduct();
 
       await http()
-        .patch(`/products/${product.id}/stock`)
+        .patch(`/products/${product.id}/variants/${onlyVariant(product)}/stock`)
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ quantity: -1 })
         .expect(400);
@@ -535,14 +564,14 @@ describe('Catalog (e2e)', () => {
       // reads would see 1 and both writes would "succeed" — the conditional
       // UPDATE makes Postgres serialize them and refuse the loser.
       const results = await Promise.all([
-        stock.decrement(product.id, 1),
-        stock.decrement(product.id, 1),
+        stock.decrement(onlyVariant(product), 1),
+        stock.decrement(onlyVariant(product), 1),
       ]);
 
       expect(results.filter(Boolean)).toHaveLength(1);
 
-      const stored = await prisma.product.findUniqueOrThrow({
-        where: { id: product.id },
+      const stored = await prisma.productVariant.findUniqueOrThrow({
+        where: { id: onlyVariant(product) },
         select: { stockQuantity: true },
       });
       expect(stored.stockQuantity).toBe(0);
@@ -555,10 +584,10 @@ describe('Catalog (e2e)', () => {
       });
       const stock = app.get(StockService);
 
-      expect(await stock.decrement(product.id, 5)).toBe(false);
+      expect(await stock.decrement(onlyVariant(product), 5)).toBe(false);
 
-      const stored = await prisma.product.findUniqueOrThrow({
-        where: { id: product.id },
+      const stored = await prisma.productVariant.findUniqueOrThrow({
+        where: { id: onlyVariant(product) },
         select: { stockQuantity: true },
       });
       expect(stored.stockQuantity).toBe(1);
@@ -571,7 +600,9 @@ describe('Catalog (e2e)', () => {
       });
       const stock = app.get(StockService);
 
-      expect(await stock.decrement(product.id, 1)).toBe(false);
+      // The status filter reaches through the relation to the owning
+      // product: lifecycle is the product's, stock is the variant's.
+      expect(await stock.decrement(onlyVariant(product), 1)).toBe(false);
     });
   });
 

@@ -673,7 +673,7 @@
         ]
       },
       "post": {
-        "description": "Products are born DRAFT and stay off the storefront until moved to ACTIVE. Omitting `slug` generates one from the name, adding a numeric suffix on collision; sending one that is already taken is a 409 instead, because a caller who chose the slug wants that slug.",
+        "description": "Products are born DRAFT and stay off the storefront until moved to ACTIVE. Omitting `slug` generates one from the name, adding a numeric suffix on collision; sending one that is already taken is a 409 instead, because a caller who chose the slug wants that slug.\n\nSend `variants` in display order — `[{ \"label\": \"P\" }, { \"label\": \"M\" }, …]` — and their `position` follows the array. Omit it and the product is born with exactly one variant labelled `Único`: a product is never created without at least one, because stock lives on the variant and a product with none would be unbuyable.",
         "operationId": "ProductsController_create",
         "parameters": [],
         "requestBody": {
@@ -698,7 +698,7 @@
             }
           },
           "400": {
-            "description": "`priceCents` is not an integer above zero, a category id is not a UUID, an image is not a URL, or the slug is not lowercase-hyphenated.",
+            "description": "`priceCents` is not an integer above zero, a category id is not a UUID, an image is not a URL, the slug is not lowercase-hyphenated, or two variants share a label.",
             "content": {
               "application/json": {
                 "schema": {
@@ -803,13 +803,120 @@
         ]
       }
     },
-    "/products/{id}/stock": {
+    "/products/{id}/variants": {
+      "post": {
+        "description": "Adds one variant. `position` defaults to the end of the list; `stockQuantity` defaults to 0, which is a real state — the size exists and has none left.\n\nThere is deliberately no route to rename, reorder or remove a variant. Adding cannot invalidate anything; removing has to decide what happens to a size somebody already bought, and that is a policy decision rather than a detail (docs/specs/product-variants.md).",
+        "operationId": "ProductsController_addVariant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVariantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The whole product, with its variants in display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`label` is empty or too long, or `position` is negative.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `products.update` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No product with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This product already has a variant with that label.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Add a size to a product",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/products/{id}/variants/{variantId}/stock": {
       "patch": {
-        "description": "An inventory correction — \"the shelf holds N\" — not a delta. Selling is the other path: checkout decrements atomically inside its transaction, and nothing here is involved in that.\n\nBe aware this is last-write-wins against a concurrent sale, which is accepted for v1 (docs/specs/catalog.md).",
+        "description": "An inventory correction — \"the shelf holds N of this size\" — not a delta. Selling is the other path: checkout decrements the variant atomically inside its transaction, and nothing here is involved in that.\n\nStock belongs to the variant, never to the product: `ProductResponse.stockQuantity` is the sum across sizes, computed on read, so it cannot drift from what checkout takes.\n\nBe aware this is last-write-wins against a concurrent sale, which is accepted for v1 (docs/specs/catalog.md).",
         "operationId": "ProductsController_setStock",
         "parameters": [
           {
             "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "variantId",
             "required": true,
             "in": "path",
             "schema": {
@@ -870,7 +977,7 @@
             }
           },
           "404": {
-            "description": "No product with that id.",
+            "description": "No such product, or that variant does not belong to it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -885,7 +992,7 @@
             "bearer": []
           }
         ],
-        "summary": "Set stock to an absolute quantity",
+        "summary": "Set one size's stock to an absolute quantity",
         "tags": [
           "products"
         ]
@@ -1358,7 +1465,7 @@
     },
     "/cart": {
       "get": {
-        "description": "Always succeeds for an authenticated caller. A user who has never added anything gets an empty cart with both totals at `0` rather than a 404 — the cart is created lazily on the first add, and its absence is not an error.\n\nProduct data on each line is read **live from the catalog**, not frozen: price, status and stock are current as of this request. That is what lets a storefront warn \"only 2 left\" or \"no longer available\". Prices freeze at checkout and not before.\n\n`itemsSubtotalCents` and `itemCount` are computed here from those same live prices, so no client has to sum money. There is deliberately **no order total** on this route: without a postal code there is no freight, and a \"total\" that is missing the freight is precisely the number a checkout must never show. That one comes from POST /shipping/quote, as `orderTotalCents` per option.",
+        "description": "Always succeeds for an authenticated caller. A user who has never added anything gets an empty cart with both totals at `0` rather than a 404 — the cart is created lazily on the first add, and its absence is not an error.\n\nCatalogue data on each line is read **live**, not frozen: price, status and the size’s own stock are current as of this request. That is what lets a storefront warn \"only 2 left\" or \"no longer available\". Prices freeze at checkout and not before.\n\nEach line names a **variant** — `variantId` is what PATCH and DELETE address, and the stock that matters is `variant.stockQuantity`, the count for that size, not a product-wide total.\n\n`itemsSubtotalCents` and `itemCount` are computed here from those same live prices, so no client has to sum money. There is deliberately **no order total** on this route: without a postal code there is no freight, and a \"total\" that is missing the freight is precisely the number a checkout must never show. That one comes from POST /shipping/quote, as `orderTotalCents` per option.",
         "operationId": "CartController_get",
         "parameters": [],
         "responses": {
@@ -1432,7 +1539,7 @@
     },
     "/cart/items": {
       "post": {
-        "description": "Additive: adding a product already in the cart **increases** its quantity rather than creating a second line. Use PATCH below to set an absolute quantity.\n\nOnly ACTIVE products can be added. A DRAFT, ARCHIVED or nonexistent product is the same 404 — the public does not get to tell an unreleased product from one that never existed.",
+        "description": "Takes a **variantId** — a size — not a product id. A product id does not say which size, and this API refuses to pick one on your behalf (docs/specs/product-variants.md).\n\nAdditive: adding a variant already in the cart **increases** its quantity rather than creating a second line, while a different size of the same product is its own line. Use PATCH below to set an absolute quantity.\n\nOnly variants of ACTIVE products can be added. A variant of a DRAFT or ARCHIVED product and a variant that does not exist are the same 404 — the public does not get to tell an unreleased product from one that never existed.",
         "operationId": "CartController_addItem",
         "parameters": [],
         "requestBody": {
@@ -1457,7 +1564,7 @@
             }
           },
           "400": {
-            "description": "`productId` is not a UUID, or `quantity` is outside 1–999.",
+            "description": "`variantId` is not a UUID, or `quantity` is outside 1–999.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1477,7 +1584,7 @@
             }
           },
           "404": {
-            "description": "No such product, or it is not ACTIVE.",
+            "description": "No such variant, or its product is not ACTIVE.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1498,13 +1605,13 @@
         ]
       }
     },
-    "/cart/items/{productId}": {
+    "/cart/items/{variantId}": {
       "patch": {
-        "description": "Absolute — \"make it 5\" — as opposed to POST /cart/items, which adds. To remove a line use DELETE; zero is not a valid quantity here.",
+        "description": "Absolute — \"make it 5\" — as opposed to POST /cart/items, which adds. The line is addressed by its **variantId**. To remove a line use DELETE; zero is not a valid quantity here.",
         "operationId": "CartController_setQuantity",
         "parameters": [
           {
-            "name": "productId",
+            "name": "variantId",
             "required": true,
             "in": "path",
             "schema": {
@@ -1555,7 +1662,7 @@
             }
           },
           "404": {
-            "description": "That product is not in the cart.",
+            "description": "That variant is not in the cart.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1579,7 +1686,7 @@
         "operationId": "CartController_removeItem",
         "parameters": [
           {
-            "name": "productId",
+            "name": "variantId",
             "required": true,
             "in": "path",
             "schema": {
@@ -1610,7 +1717,7 @@
             }
           },
           "404": {
-            "description": "That product is not in the cart.",
+            "description": "That variant is not in the cart.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2836,6 +2943,36 @@
           "refreshToken"
         ]
       },
+      "ProductVariantResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string",
+            "description": "What the customer picks. `Único` is what a product with no sizes of its own carries — every product has at least one variant, always.",
+            "example": "M"
+          },
+          "position": {
+            "type": "number",
+            "description": "Display order, ascending. Explicit because alphabetical is wrong: P/M/G/GG/XGG sorts to G, GG, M, P, XGG. Ties break by `id`, so the order is stable across requests.",
+            "example": 1
+          },
+          "stockQuantity": {
+            "type": "number",
+            "description": "Stock for THIS size. Zero means sold out, not missing — render the size struck through rather than dropping it.",
+            "example": 4
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "position",
+          "stockQuantity"
+        ]
+      },
       "ProductCategoryResponse": {
         "type": "object",
         "properties": {
@@ -2910,8 +3047,15 @@
           },
           "stockQuantity": {
             "type": "number",
-            "description": "Never negative. Checkout decrements it atomically.",
+            "description": "The SUM across `variants`, computed on read — there is no stock column on a product any more. Good enough for a grid that says \"Esgotado\" from one number; useless for deciding whether a specific size can be bought. For that, read `variants[].stockQuantity`.",
             "example": 42
+          },
+          "variants": {
+            "description": "The sellable units, ordered by `position`. **Never empty** — a product with no sizes of its own carries one labelled `Único`. Sold-out sizes are present with `stockQuantity: 0`; strike them through rather than hiding them.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductVariantResponse"
+            }
           },
           "categories": {
             "type": "array",
@@ -2938,6 +3082,7 @@
           "status",
           "weightGrams",
           "stockQuantity",
+          "variants",
           "categories",
           "createdAt",
           "updatedAt"
@@ -2972,6 +3117,34 @@
           "total",
           "page",
           "perPage"
+        ]
+      },
+      "CreateVariantDto": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "What the customer picks — `P`, `M`, `G`, `GG`, `XGG`, `Único`, `42`. Must be unique within the product.",
+            "example": "M"
+          },
+          "position": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 999,
+            "description": "Display order. Omit and it becomes this variant's index in the list, which is why sending P, M, G, GG, XGG in order simply works. Never sorted alphabetically — that would put GG before M.",
+            "example": 1
+          },
+          "stockQuantity": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0,
+            "description": "Stock for this size. Zero is a legitimate starting point — the size exists and has none left.",
+            "example": 12
+          }
+        },
+        "required": [
+          "label"
         ]
       },
       "CreateProductDto": {
@@ -3017,11 +3190,13 @@
             "default": "DRAFT",
             "description": "Products are born DRAFT and stay off the storefront until ACTIVE."
           },
-          "stockQuantity": {
-            "type": "number",
-            "minimum": 0,
-            "default": 0,
-            "example": 42
+          "variants": {
+            "maxItems": 50,
+            "description": "The sellable sizes, in display order. Omit and the product gets one variant labelled `Único` at zero stock — a product is never created without at least one. Labels must be unique within the product.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateVariantDto"
+            }
           },
           "weightGrams": {
             "type": "number",
@@ -3096,11 +3271,6 @@
               "ARCHIVED"
             ],
             "description": "This is how a product reaches ACTIVE — there is no separate publish route."
-          },
-          "stockQuantity": {
-            "type": "number",
-            "minimum": 0,
-            "example": 42
           },
           "weightGrams": {
             "type": "number",
@@ -3236,11 +3406,6 @@
             ],
             "description": "Anything other than ACTIVE means checkout will refuse this line with a 409 until it is removed."
           },
-          "stockQuantity": {
-            "type": "number",
-            "description": "Current stock. Lower than the line quantity is not an error here — it becomes one at checkout.",
-            "example": 3
-          },
           "weightGrams": {
             "type": "number",
             "nullable": true,
@@ -3253,16 +3418,45 @@
           "slug",
           "priceCents",
           "status",
-          "stockQuantity",
           "weightGrams"
+        ]
+      },
+      "CartVariantResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string",
+            "example": "M"
+          },
+          "position": {
+            "type": "number",
+            "description": "The size’s display order on its product.",
+            "example": 1
+          },
+          "stockQuantity": {
+            "type": "number",
+            "description": "Current stock of THIS size. Lower than the line quantity is not an error here — it becomes one at checkout, with a 409 naming the piece.",
+            "example": 3
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "position",
+          "stockQuantity"
         ]
       },
       "CartItemResponse": {
         "type": "object",
         "properties": {
-          "productId": {
+          "variantId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "The line’s identity. PATCH /cart/items/{variantId} and DELETE /cart/items/{variantId} address this, not the product — two sizes of one shirt are two lines."
           },
           "quantity": {
             "type": "number",
@@ -3272,12 +3466,16 @@
           },
           "product": {
             "$ref": "#/components/schemas/CartProductResponse"
+          },
+          "variant": {
+            "$ref": "#/components/schemas/CartVariantResponse"
           }
         },
         "required": [
-          "productId",
+          "variantId",
           "quantity",
-          "product"
+          "product",
+          "variant"
         ]
       },
       "CartResponse": {
@@ -3309,21 +3507,21 @@
       "AddCartItemDto": {
         "type": "object",
         "properties": {
-          "productId": {
+          "variantId": {
             "type": "string",
             "format": "uuid",
-            "description": "Must exist and be ACTIVE, or the answer is 404."
+            "description": "The **variant** (size) to add — from `ProductResponse.variants[].id`. Its product must exist and be ACTIVE, or the answer is 404. A product id is not accepted: it does not say which size."
           },
           "quantity": {
             "type": "number",
             "minimum": 1,
             "maximum": 999,
-            "description": "How many to ADD. A product already in the cart has its quantity increased rather than duplicated. The 999 bound applies per request, not to the resulting line.",
+            "description": "How many to ADD. The same variant already in the cart has its quantity increased rather than duplicated; a DIFFERENT size of the same product is a separate line. The 999 bound applies per request, not to the resulting line.",
             "example": 2
           }
         },
         "required": [
-          "productId",
+          "variantId",
           "quantity"
         ]
       },
@@ -3429,6 +3627,16 @@
             "description": "The name at the moment of purchase.",
             "example": "Camiseta Azul"
           },
+          "variantId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The size that was bought. Traceability, like productId."
+          },
+          "variantLabel": {
+            "type": "string",
+            "description": "The size's label at the moment of purchase — a snapshot, exactly like the name and the price. Renaming a size later never rewrites an order that already exists.",
+            "example": "M"
+          },
           "unitPriceCents": {
             "type": "number",
             "description": "The price at the moment of purchase, in cents.",
@@ -3442,6 +3650,8 @@
         "required": [
           "productId",
           "productName",
+          "variantId",
+          "variantLabel",
           "unitPriceCents",
           "quantity"
         ]

@@ -40,15 +40,15 @@ critério de sucesso (deploy real).
 | Módulo | O que faz | Spec |
 | --- | --- | --- |
 | `auth` | Registro, verificação de e-mail, login (senha e Google), refresh rotativo de uso único, reset de senha, RBAC por permissão | [auth](specs/auth.md) |
-| `catalog` | Produtos, categorias, estoque, ciclo `DRAFT → ACTIVE → ARCHIVED` | [catalog](specs/catalog.md) |
-| `orders` | Carrinho, checkout, ciclo `CREATED → PAID → SHIPPED → DELIVERED` mais `CANCELLED`/`REFUNDED` | [orders](specs/orders.md) |
+| `catalog` | Produtos, categorias, **variantes** (tamanho) com estoque próprio, ciclo `DRAFT → ACTIVE → ARCHIVED` | [catalog](specs/catalog.md), [product-variants](specs/product-variants.md) |
+| `orders` | Carrinho **por variante** com totais prontos, checkout, ciclo `CREATED → PAID → SHIPPED → DELIVERED` mais `CANCELLED`/`REFUNDED` | [orders](specs/orders.md), [cart-totals](specs/cart-totals.md) |
 | `payments` | Stripe atrás de `PaymentProvider`: Checkout Session (hosted/embedded), webhook assinado, reembolso | [payments](specs/payments.md) |
 | `shipping` | Frete atrás de `ShippingProvider`: tabela por prefixo de CEP e faixa de peso | [shipping](specs/shipping.md) |
 | `mail` | Quatro e-mails transacionais do pedido, atrás de `MailService` | [order-emails](specs/order-emails.md) |
 | `openapi` | Documento gerado dos decorators, commitado e conferido pelo CI | [openapi](specs/openapi.md) |
 
-Números: **38 rotas** em 8 controllers, **440 testes unitários**,
-**161 e2e**, 10 migrations.
+Números: **39 rotas** em 8 controllers, **468 testes unitários**,
+**189 e2e**, 11 migrations.
 
 ### Autorização
 
@@ -87,13 +87,18 @@ está nas "decisões adiadas" da spec correspondente e no fim de
    e reset, e as URLs de retorno do Stripe, apontam para o **front-end** —
    são páginas que você precisa implementar. Hoje `APP_URL` é um
    placeholder e esses links vão dar 404 num browser.
-5. **Fluxo de compra**: `POST /cart/items` → `POST /shipping/quote` →
+5. **Fluxo de compra**: `POST /cart/items` (com `variantId` — a unidade
+   vendável é o **tamanho**, ver
+   [`specs/product-variants.md`](specs/product-variants.md)) →
+   `POST /shipping/quote` →
    `POST /orders` (com `shippingOptionCode` e `quotedShippingCents`, que o
    servidor re-cota) → o cliente paga em `payment.url` (hosted) ou monta o
    formulário com `payment.clientSecret` (embedded) → o **webhook** move o
    pedido para `PAID`, não o retorno do browser.
 6. **Dinheiro é sempre `Int` em centavos.** Nunca float. Uma moeda por
-   instância (`STRIPE_CURRENCY`); o pedido não tem coluna de moeda.
+   instância (`STRIPE_CURRENCY`); o pedido não tem coluna de moeda. E os
+   totais vêm prontos — subtotal e contagem no carrinho, total do pedido por
+   opção de frete ([`specs/cart-totals.md`](specs/cart-totals.md)).
 
 ## Buracos conhecidos
 
@@ -105,6 +110,8 @@ detalhe e o esboço de correção de cada um:
   pedido, sem consumidor.
 - O parser da tabela de frete ignora chaves que não conhece — foi assim
   que `etaDays` ficou anos documentado no lugar de `estimatedDays`.
+- As linhas do carrinho voltam ordenadas por um UUID: estável, mas sem
+  significado nenhum pra quem lê.
 
 Fora esses, o item de operação mais importante: o **rate limiting é em
 memória, por instância**. Com uma instância está correto por construção;

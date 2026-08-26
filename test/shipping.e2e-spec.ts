@@ -137,9 +137,15 @@ describe('Shipping (e2e)', () => {
     return (response.body as { accessToken: string }).accessToken;
   }
 
+  interface ProductResponse {
+    id: string;
+    variants: { id: string; label: string; stockQuantity: number }[];
+  }
+
+  /** A product with one size; stock lives on the variant now. */
   async function createProduct(
     overrides: Record<string, unknown> = {},
-  ): Promise<{ id: string }> {
+  ): Promise<ProductResponse> {
     const response = await http()
       .post('/products')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -147,24 +153,24 @@ describe('Shipping (e2e)', () => {
         name: 'Camiseta',
         priceCents: 5000,
         status: 'ACTIVE',
-        stockQuantity: 10,
+        variants: [{ label: 'Único', stockQuantity: 10 }],
         ...overrides,
       })
       .expect(201);
 
-    return response.body as { id: string };
+    return response.body as ProductResponse;
   }
 
   async function fillCart(
     quantity = 1,
     overrides: Record<string, unknown> = {},
-  ): Promise<{ id: string }> {
+  ): Promise<ProductResponse> {
     const product = await createProduct(overrides);
 
     await http()
       .post('/cart/items')
       .set('Authorization', `Bearer ${customerToken}`)
-      .send({ productId: product.id, quantity })
+      .send({ variantId: product.variants[0].id, quantity })
       .expect(201);
 
     return product;
@@ -395,8 +401,8 @@ describe('Shipping (e2e)', () => {
         ]) as unknown,
       });
       await expect(prisma.order.count()).resolves.toBe(0);
-      const stored = await prisma.product.findUniqueOrThrow({
-        where: { id: product.id },
+      const stored = await prisma.productVariant.findUniqueOrThrow({
+        where: { id: product.variants[0].id },
         select: { stockQuantity: true },
       });
       // Nothing was decremented: the refusal happens before the transaction.

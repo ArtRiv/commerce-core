@@ -1,8 +1,12 @@
-/// A line of an order with the purchase-time snapshot: productName and
-/// unitPriceCents are copies, not joins — what the customer bought at the
-/// price they paid. The product FK is traceability only and Restricts
-/// deletion: a financial record holds its product row forever (safe because
-/// the catalog archives instead of deleting).
+/// A line of an order with the purchase-time snapshot: productName,
+/// variantLabel and unitPriceCents are copies, not joins — what the customer
+/// bought, in the size they bought it, at the price they paid. Both FKs are
+/// traceability only and Restrict deletion: a financial record holds its
+/// product and variant rows forever (safe because the catalog archives instead
+/// of deleting).
+///
+/// variantLabel is a snapshot for exactly the reason productName is: a size
+/// renamed later must not rewrite what somebody bought.
 model OrderItem {
   id      String @id @default(uuid())
   orderId String @map("order_id")
@@ -11,10 +15,16 @@ model OrderItem {
   productId String  @map("product_id")
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  variantId String         @map("variant_id")
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
   productName    String @map("product_name")
+  variantLabel   String @map("variant_label")
   unitPriceCents Int    @map("unit_price_cents")
   quantity       Int
 
-  @@unique([orderId, productId])
+  /// Per VARIANT, not per product: two sizes of one shirt are two legitimate
+  /// lines of a single order, which the old unique forbade.
+  @@unique([orderId, variantId])
   @@map("order_items")
 }

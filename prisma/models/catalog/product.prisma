@@ -40,17 +40,20 @@ model Product {
   /// No dimensions in v1; cubic weight is a deferred decision.
   weightGrams Int? @map("weight_grams")
 
-  /// Simple stock control: one count per product (no variants in v1).
-  /// Never negative — decrements happen as a conditional UPDATE in
-  /// StockService so a race for the last unit is settled by Postgres,
-  /// not by application-side check-then-write.
-  stockQuantity Int @default(0) @map("stock_quantity")
+  /// The sellable units. ALWAYS at least one — a product with none would be
+  /// unbuyable, and the fork "product with variants / product without" is what
+  /// this relation exists to prevent (docs/specs/product-variants.md).
+  ///
+  /// Stock used to be a column here. It is not any more: it lives on the
+  /// variant, and `ProductResponse.stockQuantity` is the sum across these,
+  /// computed on read so it cannot drift from what checkout decrements.
+  variants ProductVariant[]
 
   categories ProductCategory[]
 
-  /// Back-relations for the orders module (docs/specs/orders.md). Order items
-  /// Restrict product deletion — one more reason DELETE archives.
-  cartItems  CartItem[]
+  /// Back-relation for the orders module (docs/specs/orders.md). Order items
+  /// Restrict product deletion — one more reason DELETE archives. Cart lines
+  /// point at a VARIANT, so there is no cartItems back-relation here.
   orderItems OrderItem[]
 
   createdAt DateTime @default(now()) @map("created_at")

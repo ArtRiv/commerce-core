@@ -85,7 +85,10 @@ export class ShippingQuoteService {
     const options = await this.quote(
       postalCode,
       cart.items.map((item) => ({
-        productId: item.productId,
+        // Freight speaks in PRODUCTS: weight is a property of the article, not
+        // of its size, so two lines of one shirt in P and M are two lines of
+        // the same product id here.
+        productId: item.product.id,
         quantity: item.quantity,
         unitPriceCents: item.product.priceCents,
         weightGrams: item.product.weightGrams,

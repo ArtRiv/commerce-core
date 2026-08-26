@@ -334,6 +334,12 @@ Resposta do carrinho: itens com `{ productId, quantity, product:
 front deriva avisos ("saiu de linha", "estoque menor que a quantidade").
 Resposta de listagem de pedidos: `{ items, total, page, perPage }`.
 
+> **Duas mudanças depois desta spec.** A linha do carrinho passou a
+> endereçar uma **variante** — `{ variantId, quantity, product, variant }`,
+> com o estoque no `variant` — e o carrinho ganhou `itemsSubtotalCents` e
+> `itemCount`. Ver [`product-variants.md`](product-variants.md) e
+> [`cart-totals.md`](cart-totals.md).
+
 ### Contrato com payments (v1)
 
 Esta é a forma que orders entregou. A interface cresceu em

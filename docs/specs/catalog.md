@@ -44,8 +44,11 @@ atômico) que o módulo `orders` vai consumir no checkout.
 
 ### Não entra (fica pra depois)
 
-- Variantes de produto (tamanho/cor com SKU próprio) — v1: um produto
-  = uma unidade vendável, um preço, um estoque
+- ~~Variantes de produto (tamanho/cor com SKU próprio) — v1: um produto
+  = uma unidade vendável, um preço, um estoque~~ — **entrou depois**, em
+  [`product-variants.md`](product-variants.md): tamanho virou a unidade
+  vendável e o estoque desceu do produto pra variante. Preço continua um por
+  produto; cor continua fora
 - Categorias aninhadas (`parentId`) — v1 é flat
 - Upload/armazenamento de imagem — v1 guarda só URLs (string[]);
   storage (S3/Supabase Storage) entra quando houver painel admin real
@@ -89,6 +92,12 @@ atômico) que o módulo `orders` vai consumir no checkout.
   nenhum import de `orders` aqui dentro.
 
 ## Modelo de dados (esboço Prisma)
+
+> **Desatualizado de propósito.** `products.stock_quantity` **não existe
+> mais**: o estoque desceu pra `product_variants` em
+> [`product-variants.md`](product-variants.md), e `ProductResponse
+> .stockQuantity` passou a ser a soma calculada na leitura. O esboço abaixo
+> é o que esta spec entregou, e fica como registro.
 
 ```prisma
 enum ProductStatus {
@@ -156,7 +165,7 @@ table) — produto órfão de categoria é válido.
 | POST   | `/products`                | Cria produto (nasce `DRAFT` por default)               | `products.create`                 |
 | PATCH  | `/products/:id`            | Atualiza campos, incl. `status` e categorias           | `products.update`                 |
 | DELETE | `/products/:id`            | Arquiva (soft delete)                                  | `products.delete`                 |
-| PATCH  | `/products/:id/stock`      | Define quantidade absoluta (acerto de inventário)      | `products.update`                 |
+| PATCH  | ~~`/products/:id/stock`~~   | **substituída** por `/products/:id/variants/:variantId/stock` ([product-variants.md](product-variants.md)) | `products.update`                 |
 | GET    | `/categories`              | Lista todas (categoria não tem status)                 | público                           |
 | GET    | `/categories/:slug`        | Detalhe                                                | público                           |
 | POST   | `/categories`              | Cria categoria                                         | `products.create`                 |
@@ -282,11 +291,17 @@ unitários ao lado do código.
 
 ## Decisões adiadas
 
-- **Variantes** (tamanho/cor, SKU por variante). Quando entrarem, o
+- ~~**Variantes** (tamanho/cor, SKU por variante). Quando entrarem, o
   estoque desce do produto pra variante — a interface
   `StockService.decrement(productId, qty)` vira
   `decrement(variantId, qty)`; `orders` referenciará o id vendável, o
-  que contém a mudança.
+  que contém a mudança.~~ **Feito**, em
+  [`product-variants.md`](product-variants.md), e foi exatamente isso: o
+  `decrement` passou a endereçar variante e `orders` passou a referenciar o
+  id vendável. O que a previsão não dizia é que a coluna
+  `products.stock_quantity` teria de **sair**, não virar uma soma
+  desnormalizada — duas fontes de verdade pra estoque é como se vende o que
+  não se tem. Cor e SKU composto continuam adiados.
 - **Categorias aninhadas** — adicionar `parentId` auto-referente é
   migration pequena; o custo real (query de subárvore na listagem)
   fica pra quando um front precisar de árvore de navegação.

@@ -44,13 +44,20 @@ flowchart LR
   cliente do que aconteceu com o pedido). Nenhum desses quatro conhece
   `orders` de volta — o que cruza a fronteira do `mail` é um view model do
   próprio `mail` (`OrderEmailData`), montado aqui. O contrato do lado de `catalog`
-  está em uso: `CatalogModule` exporta `ProductsService` (`findByIds`,
-  a leitura em lote do que está sendo comprado, e por onde o peso do
-  produto chega ao frete) e `StockService`
-  (`decrement`, o UPDATE condicional atômico do checkout, e `restock`,
-  a devolução do cancelamento — ambos aceitam um client de transação
-  pro checkout/cancelamento serem atômicos através da fronteira) —
+  está em uso: `CatalogModule` exporta `ProductsService`
+  (`findSellableByVariantIds`, a leitura em lote **por variante** do que está
+  sendo comprado — e por onde o preço e o peso do produto chegam ao carrinho
+  e ao frete) e `StockService` (`decrement`, o UPDATE condicional atômico do
+  checkout, e `restock`, a devolução do cancelamento — ambos **endereçam uma
+  variante**, e ambos aceitam um client de transação pro
+  checkout/cancelamento serem atômicos através da fronteira) —
   `orders` nunca toca nas tabelas do catálogo.
+
+  A unidade vendável virou a **variante** em
+  [`../specs/product-variants.md`](../specs/product-variants.md): estoque mora
+  nela, linha de carrinho e item de pedido apontam pra ela, e o produto
+  continua dono de preço, peso e ciclo de vida. Nada disso muda a direção de
+  seta nenhuma — muda o vocabulário que atravessa a fronteira.
 - `catalog`, `payments` e `shipping` não se conhecem entre si.
 - `auth` não depende de nenhum módulo de domínio. Os outros módulos
   usam `auth` só através de decorators (`@Public()`,

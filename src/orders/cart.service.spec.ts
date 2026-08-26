@@ -5,31 +5,48 @@ import { ProductStatus } from '../generated/prisma/enums';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CartService } from './cart.service';
 
-interface SellableProduct {
+interface SellableVariant {
   id: string;
-  name: string;
-  slug: string;
-  priceCents: number;
-  status: ProductStatus;
+  label: string;
+  position: number;
   stockQuantity: number;
+  product: {
+    id: string;
+    name: string;
+    slug: string;
+    priceCents: number;
+    status: ProductStatus;
+    weightGrams: number | null;
+  };
 }
 
-function sellable(overrides: Partial<SellableProduct> = {}): SellableProduct {
+/** One size of one product, as the catalogue contract hands it over. */
+function sellable(
+  overrides: Partial<Omit<SellableVariant, 'product'>> = {},
+  product: Partial<SellableVariant['product']> = {},
+): SellableVariant {
   return {
-    id: 'product-1',
-    name: 'Camiseta Azul',
-    slug: 'camiseta-azul',
-    priceCents: 4990,
-    status: ProductStatus.ACTIVE,
+    id: 'variant-m',
+    label: 'M',
+    position: 1,
     stockQuantity: 10,
     ...overrides,
+    product: {
+      id: 'product-1',
+      name: 'Camiseta Azul',
+      slug: 'camiseta-azul',
+      priceCents: 4990,
+      status: ProductStatus.ACTIVE,
+      weightGrams: 220,
+      ...product,
+    },
   };
 }
 
 interface CartRow {
   id: string;
   userId: string;
-  items: { productId: string; quantity: number }[];
+  items: { variantId: string; quantity: number }[];
 }
 
 function createPrismaMock() {
@@ -52,8 +69,8 @@ function createPrismaMock() {
 
 function createProductsMock() {
   return {
-    findByIds: jest
-      .fn<Promise<SellableProduct[]>, [string[]]>()
+    findSellableByVariantIds: jest
+      .fn<Promise<SellableVariant[]>, [string[]]>()
       .mockResolvedValue([]),
   };
 }
@@ -80,28 +97,67 @@ describe('CartService', () => {
       // Zero, not null and not absent: a badge that has to handle undefined
       // is a badly written contract (docs/specs/cart-totals.md).
       expect(cart).toEqual({ items: [], itemsSubtotalCents: 0, itemCount: 0 });
-      expect(products.findByIds).not.toHaveBeenCalled();
+      expect(products.findSellableByVariantIds).not.toHaveBeenCalled();
     });
 
-    it('joins items with live catalog data through the exported contract', async () => {
+    it('joins lines with live catalog data through the exported contract', async () => {
       const prisma = createPrismaMock();
       const products = createProductsMock();
       prisma.cart.findUnique.mockResolvedValue({
         id: 'cart-1',
         userId: 'user-1',
-        items: [{ productId: 'product-1', quantity: 2 }],
+        items: [{ variantId: 'variant-m', quantity: 2 }],
       });
-      const live = sellable({ priceCents: 5990 });
-      products.findByIds.mockResolvedValue([live]);
+      const live = sellable({ stockQuantity: 3 }, { priceCents: 5990 });
+      products.findSellableByVariantIds.mockResolvedValue([live]);
 
       const cart = await serviceWith(prisma, products).getCart('user-1');
 
       // Live price, not a snapshot: the cart never freezes money, checkout
-      // does. Callers see today's catalog, whatever it says.
+      // does. Callers see today's catalog, whatever it says. The stock that
+      // travels is the SIZE's, which is the only one that means anything on
+      // a cart line.
       expect(cart.items).toEqual([
-        { productId: 'product-1', quantity: 2, product: live },
+        {
+          variantId: 'variant-m',
+          quantity: 2,
+          product: live.product,
+          variant: {
+            id: 'variant-m',
+            label: 'M',
+            position: 1,
+            stockQuantity: 3,
+          },
+        },
       ]);
-      expect(products.findByIds).toHaveBeenCalledWith(['product-1']);
+      expect(products.findSellableByVariantIds).toHaveBeenCalledWith([
+        'variant-m',
+      ]);
+    });
+
+    it('keeps two sizes of one product as two separate lines', async () => {
+      const prisma = createPrismaMock();
+      const products = createProductsMock();
+      prisma.cart.findUnique.mockResolvedValue({
+        id: 'cart-1',
+        userId: 'user-1',
+        items: [
+          { variantId: 'variant-p', quantity: 1 },
+          { variantId: 'variant-m', quantity: 2 },
+        ],
+      });
+      products.findSellableByVariantIds.mockResolvedValue([
+        sellable({ id: 'variant-p', label: 'P', position: 0 }),
+        sellable({ id: 'variant-m', label: 'M', position: 1 }),
+      ]);
+
+      const cart = await serviceWith(prisma, products).getCart('user-1');
+
+      expect(cart.items.map((item) => item.variant.label)).toEqual(['P', 'M']);
+      // Same product on both lines — that is the point, not a bug.
+      expect(cart.items.every((item) => item.product.id === 'product-1')).toBe(
+        true,
+      );
     });
 
     it('totals the lines server-side, in pieces and in cents', async () => {
@@ -111,13 +167,16 @@ describe('CartService', () => {
         id: 'cart-1',
         userId: 'user-1',
         items: [
-          { productId: 'product-1', quantity: 2 },
-          { productId: 'product-2', quantity: 1 },
+          { variantId: 'variant-m', quantity: 2 },
+          { variantId: 'variant-u', quantity: 1 },
         ],
       });
-      products.findByIds.mockResolvedValue([
-        sellable({ id: 'product-1', priceCents: 4990 }),
-        sellable({ id: 'product-2', priceCents: 2500 }),
+      products.findSellableByVariantIds.mockResolvedValue([
+        sellable({ id: 'variant-m' }, { priceCents: 4990 }),
+        sellable(
+          { id: 'variant-u', label: 'Único', position: 0 },
+          { id: 'product-2', priceCents: 2500 },
+        ),
       ]);
 
       const cart = await serviceWith(prisma, products).getCart('user-1');
@@ -133,10 +192,12 @@ describe('CartService', () => {
       prisma.cart.findUnique.mockResolvedValue({
         id: 'cart-1',
         userId: 'user-1',
-        items: [{ productId: 'product-1', quantity: 2 }],
+        items: [{ variantId: 'variant-m', quantity: 2 }],
       });
       // The line was added at 4990; the back office has since repriced it.
-      products.findByIds.mockResolvedValue([sellable({ priceCents: 5990 })]);
+      products.findSellableByVariantIds.mockResolvedValue([
+        sellable({}, { priceCents: 5990 }),
+      ]);
 
       const cart = await serviceWith(prisma, products).getCart('user-1');
 
@@ -147,17 +208,17 @@ describe('CartService', () => {
   });
 
   describe('addItem', () => {
-    it('lazily creates the cart and upserts the item, incrementing on repeat', async () => {
+    it('lazily creates the cart and upserts the line, incrementing on repeat', async () => {
       const prisma = createPrismaMock();
       const products = createProductsMock();
-      products.findByIds.mockResolvedValue([sellable()]);
+      products.findSellableByVariantIds.mockResolvedValue([sellable()]);
       prisma.cart.findUnique.mockResolvedValue({
         id: 'cart-1',
         userId: 'user-1',
-        items: [{ productId: 'product-1', quantity: 3 }],
+        items: [{ variantId: 'variant-m', quantity: 3 }],
       });
 
-      await serviceWith(prisma, products).addItem('user-1', 'product-1', 3);
+      await serviceWith(prisma, products).addItem('user-1', 'variant-m', 3);
 
       const [upsertArgs] = prisma.cart.upsert.mock.calls[0] as [
         { where: { userId: string } },
@@ -167,38 +228,41 @@ describe('CartService', () => {
       const [itemArgs] = prisma.cartItem.upsert.mock.calls[0] as [
         {
           where: unknown;
-          create: { cartId: string; productId: string; quantity: number };
+          create: { cartId: string; variantId: string; quantity: number };
           update: { quantity: { increment: number } };
         },
       ];
-      // Same product added twice sums quantities instead of duplicating the
-      // line — resolved by the DB upsert, not a read-then-write.
+      // The SAME size added twice sums quantities instead of duplicating the
+      // line — resolved by the DB upsert, not a read-then-write. A different
+      // size is a different line, by the cartId+variantId unique.
       expect(itemArgs.create).toEqual({
         cartId: 'cart-1',
-        productId: 'product-1',
+        variantId: 'variant-m',
         quantity: 3,
       });
       expect(itemArgs.update).toEqual({ quantity: { increment: 3 } });
     });
 
     it.each([ProductStatus.DRAFT, ProductStatus.ARCHIVED])(
-      '404s on a %s product — the public cannot tell hidden from missing',
+      '404s a variant of a %s product — the public cannot tell hidden from missing',
       async (status) => {
         const prisma = createPrismaMock();
         const products = createProductsMock();
-        products.findByIds.mockResolvedValue([sellable({ status })]);
+        products.findSellableByVariantIds.mockResolvedValue([
+          sellable({}, { status }),
+        ]);
 
         await expect(
-          serviceWith(prisma, products).addItem('user-1', 'product-1', 1),
+          serviceWith(prisma, products).addItem('user-1', 'variant-m', 1),
         ).rejects.toThrow(NotFoundException);
         expect(prisma.cart.upsert).not.toHaveBeenCalled();
       },
     );
 
-    it('404s on a product that does not exist at all', async () => {
+    it('404s on a variant that does not exist at all', async () => {
       const prisma = createPrismaMock();
       const products = createProductsMock();
-      products.findByIds.mockResolvedValue([]);
+      products.findSellableByVariantIds.mockResolvedValue([]);
 
       await expect(
         serviceWith(prisma, products).addItem('user-1', 'ghost', 1),
@@ -211,38 +275,38 @@ describe('CartService', () => {
       const products = createProductsMock();
 
       await expect(
-        serviceWith(prisma, products).addItem('user-1', 'product-1', 0),
+        serviceWith(prisma, products).addItem('user-1', 'variant-m', 0),
       ).rejects.toThrow(BadRequestException);
-      expect(products.findByIds).not.toHaveBeenCalled();
+      expect(products.findSellableByVariantIds).not.toHaveBeenCalled();
       expect(prisma.cart.upsert).not.toHaveBeenCalled();
     });
   });
 
   describe('setQuantity', () => {
-    it('sets the absolute quantity on an existing item', async () => {
+    it('sets the absolute quantity on an existing line', async () => {
       const prisma = createPrismaMock();
       const products = createProductsMock();
       prisma.cart.findUnique.mockResolvedValue({
         id: 'cart-1',
         userId: 'user-1',
-        items: [{ productId: 'product-1', quantity: 5 }],
+        items: [{ variantId: 'variant-m', quantity: 5 }],
       });
       prisma.cartItem.updateMany.mockResolvedValue({ count: 1 });
-      products.findByIds.mockResolvedValue([sellable()]);
+      products.findSellableByVariantIds.mockResolvedValue([sellable()]);
 
-      await serviceWith(prisma, products).setQuantity('user-1', 'product-1', 5);
+      await serviceWith(prisma, products).setQuantity('user-1', 'variant-m', 5);
 
       const [args] = prisma.cartItem.updateMany.mock.calls[0] as [
         {
-          where: { cartId: string; productId: string };
+          where: { cartId: string; variantId: string };
           data: { quantity: number };
         },
       ];
-      expect(args.where).toEqual({ cartId: 'cart-1', productId: 'product-1' });
+      expect(args.where).toEqual({ cartId: 'cart-1', variantId: 'variant-m' });
       expect(args.data).toEqual({ quantity: 5 });
     });
 
-    it('404s when the item is not in the cart', async () => {
+    it('404s when that size is not in the cart', async () => {
       const prisma = createPrismaMock();
       const products = createProductsMock();
       prisma.cart.findUnique.mockResolvedValue({
@@ -263,14 +327,14 @@ describe('CartService', () => {
       prisma.cart.findUnique.mockResolvedValue(null);
 
       await expect(
-        serviceWith(prisma, products).setQuantity('user-1', 'product-1', 2),
+        serviceWith(prisma, products).setQuantity('user-1', 'variant-m', 2),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.cartItem.updateMany).not.toHaveBeenCalled();
     });
   });
 
   describe('removeItem', () => {
-    it('removes the item and 404s when it was never there', async () => {
+    it('removes the line and 404s when it was never there', async () => {
       const prisma = createPrismaMock();
       const products = createProductsMock();
       prisma.cart.findUnique.mockResolvedValue({
@@ -280,11 +344,11 @@ describe('CartService', () => {
       });
       prisma.cartItem.deleteMany.mockResolvedValueOnce({ count: 1 });
 
-      await serviceWith(prisma, products).removeItem('user-1', 'product-1');
+      await serviceWith(prisma, products).removeItem('user-1', 'variant-m');
       const [args] = prisma.cartItem.deleteMany.mock.calls[0] as [
-        { where: { cartId: string; productId: string } },
+        { where: { cartId: string; variantId: string } },
       ];
-      expect(args.where).toEqual({ cartId: 'cart-1', productId: 'product-1' });
+      expect(args.where).toEqual({ cartId: 'cart-1', variantId: 'variant-m' });
 
       prisma.cartItem.deleteMany.mockResolvedValueOnce({ count: 0 });
       await expect(

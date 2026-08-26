@@ -33,6 +33,33 @@ cumulative cap entirely and only bound absolute `setQuantity`. Small
 either way — revisit if it ever matters (found during code review,
 2026-07-21).
 
+## orders: cart lines come back in a meaningless order
+
+**Where**: `CartService.getCart` (`src/orders/cart.service.ts`), the
+`orderBy: { id: 'asc' }` over the cart's items.
+
+**What**: `cart_items.id` is a random UUID, so ordering by it is
+*stable* (one cart reads back the same way every time) but *arbitrary*:
+it reflects neither the order things were added nor anything a shopper
+would recognise. Product variants made this visible — add the P and then
+the M of one shirt and the response may well list M first, which reads
+as a bug to anyone looking at the cart.
+
+**Why accepted for v1**: nothing is wrong, only unhelpful. The order is
+deterministic, no data is missing, and a storefront has what it needs to
+sort for itself — `variant.position` within a product, `product.name`
+across products. The e2e that ran into this compares the lines as a set
+and says why (found writing
+[`specs/product-variants.md`](specs/product-variants.md), 2026-08-26).
+
+**Fix sketch**: `cart_items` has no `created_at`, which is exactly why
+insertion order is not available to sort by — adding one is a small
+migration, and then `orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]`
+means "the order I put them in", which is what a cart usually implies.
+Sorting by product name and then `variant.position` would be prettier
+and would make the list jump when a product is renamed. Either belongs
+in its own PR; both are cheap.
+
 ## orders: provider identifiers ship in every order response
 
 **Where**: `OrdersService.getById` / `list` / `findOne`

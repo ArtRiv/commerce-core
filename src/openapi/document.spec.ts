@@ -38,8 +38,14 @@ const CONTROLLERS = [
   ShippingQuoteController,
 ];
 
-/** The audited size of the v1 surface (docs/specs/openapi.md). */
-const EXPECTED_ROUTE_COUNT = 38;
+/**
+ * The audited size of the v1 surface (docs/specs/openapi.md).
+ *
+ * 39 since product variants: `PATCH /products/{id}/stock` became
+ * `PATCH /products/{id}/variants/{variantId}/stock` (net zero) and
+ * `POST /products/{id}/variants` arrived (net one).
+ */
+const EXPECTED_ROUTE_COUNT = 39;
 
 const HTTP_METHOD = new Map<RequestMethod, string>([
   [RequestMethod.GET, 'get'],

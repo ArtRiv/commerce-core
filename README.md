@@ -46,7 +46,7 @@ pnpm run start:prod
 
 ## Documentação da API
 
-Com o app no ar, a spec OpenAPI 3 completa das 38 rotas fica em:
+Com o app no ar, a spec OpenAPI 3 completa das 39 rotas fica em:
 
 - **`/docs`** — Swagger UI, navegável, com "Authorize" pro bearer token
 - **`/docs-json`** — o documento cru

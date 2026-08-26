@@ -19,17 +19,30 @@ const ADDRESS = {
   postalCode: '80000-000',
 };
 
+interface ProductVariant {
+  id: string;
+  label: string;
+  position: number;
+  stockQuantity: number;
+}
+
+interface ProductResponse {
+  id: string;
+  stockQuantity: number;
+  variants: ProductVariant[];
+}
+
 interface CartResponse {
   items: {
-    productId: string;
+    variantId: string;
     quantity: number;
     product: {
       id: string;
       name: string;
       priceCents: number;
       status: ProductStatus;
-      stockQuantity: number;
     };
+    variant: ProductVariant;
   }[];
   itemsSubtotalCents: number;
   itemCount: number;
@@ -58,6 +71,8 @@ interface OrderResponse {
   items: {
     productId: string;
     productName: string;
+    variantId: string;
+    variantLabel: string;
     unitPriceCents: number;
     quantity: number;
   }[];
@@ -136,9 +151,16 @@ describe('Orders (e2e)', () => {
     return (response.body as { accessToken: string }).accessToken;
   }
 
+  /**
+   * A product with ONE size unless told otherwise. Stock is a property of the
+   * variant now, so `stockQuantity` here fills the single variant rather than
+   * a column on the product.
+   */
   async function createProduct(
     overrides: Record<string, unknown> = {},
-  ): Promise<{ id: string }> {
+  ): Promise<ProductResponse> {
+    const { stockQuantity = 10, ...rest } = overrides;
+
     const response = await http()
       .post('/products')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -146,23 +168,28 @@ describe('Orders (e2e)', () => {
         name: 'Camiseta Azul',
         priceCents: 4990,
         status: ProductStatus.ACTIVE,
-        stockQuantity: 10,
-        ...overrides,
+        variants: [{ label: 'Único', stockQuantity }],
+        ...rest,
       })
       .expect(201);
 
-    return response.body as { id: string };
+    return response.body as ProductResponse;
+  }
+
+  /** The only variant of a single-size product — what most tests want. */
+  function onlyVariant(product: ProductResponse): string {
+    return product.variants[0].id;
   }
 
   async function addToCart(
     token: string,
-    productId: string,
+    variantId: string,
     quantity: number,
   ): Promise<CartResponse> {
     const response = await http()
       .post('/cart/items')
       .set('Authorization', `Bearer ${token}`)
-      .send({ productId, quantity })
+      .send({ variantId, quantity })
       .expect(201);
 
     return response.body as CartResponse;
@@ -218,12 +245,13 @@ describe('Orders (e2e)', () => {
     orderTotalCents: 0,
   };
 
-  async function stockOf(productId: string): Promise<number> {
-    const product = await prisma.product.findUniqueOrThrow({
-      where: { id: productId },
+  /** Stock of one size, read straight from the table that now holds it. */
+  async function stockOf(variantId: string): Promise<number> {
+    const variant = await prisma.productVariant.findUniqueOrThrow({
+      where: { id: variantId },
       select: { stockQuantity: true },
     });
-    return product.stockQuantity;
+    return variant.stockQuantity;
   }
 
   async function transition(
@@ -245,26 +273,28 @@ describe('Orders (e2e)', () => {
       await http().get('/cart').expect(401);
       await http()
         .post('/cart/items')
-        .send({ productId: 'x', quantity: 1 })
+        .send({ variantId: 'x', quantity: 1 })
         .expect(401);
     });
 
     it('lazily creates the cart on first add and shows live catalog data', async () => {
       const product = await createProduct();
 
-      const cart = await addToCart(customerToken, product.id, 2);
+      const cart = await addToCart(customerToken, onlyVariant(product), 2);
 
       expect(cart.items).toHaveLength(1);
       expect(cart.items[0].quantity).toBe(2);
       expect(cart.items[0].product.priceCents).toBe(4990);
-      expect(cart.items[0].product.stockQuantity).toBe(10);
+      // The stock that travels is the SIZE's — the only one that means
+      // anything on a cart line (docs/specs/product-variants.md).
+      expect(cart.items[0].variant.stockQuantity).toBe(10);
     });
 
     it('sums quantities when the same product is added again', async () => {
       const product = await createProduct();
 
-      await addToCart(customerToken, product.id, 2);
-      const cart = await addToCart(customerToken, product.id, 3);
+      await addToCart(customerToken, onlyVariant(product), 2);
+      const cart = await addToCart(customerToken, onlyVariant(product), 3);
 
       expect(cart.items).toHaveLength(1);
       expect(cart.items[0].quantity).toBe(5);
@@ -276,14 +306,14 @@ describe('Orders (e2e)', () => {
       await http()
         .post('/cart/items')
         .set('Authorization', `Bearer ${customerToken}`)
-        .send({ productId: draft.id, quantity: 1 })
+        .send({ variantId: onlyVariant(draft), quantity: 1 })
         .expect(404);
 
       await http()
         .post('/cart/items')
         .set('Authorization', `Bearer ${customerToken}`)
         .send({
-          productId: '00000000-0000-4000-8000-000000000000',
+          variantId: '00000000-0000-4000-8000-000000000000',
           quantity: 1,
         })
         .expect(404);
@@ -296,29 +326,29 @@ describe('Orders (e2e)', () => {
         await http()
           .post('/cart/items')
           .set('Authorization', `Bearer ${customerToken}`)
-          .send({ productId: product.id, quantity })
+          .send({ variantId: onlyVariant(product), quantity })
           .expect(400);
       }
     });
 
     it('sets absolute quantities, removes items, clears the cart', async () => {
       const product = await createProduct();
-      await addToCart(customerToken, product.id, 2);
+      await addToCart(customerToken, onlyVariant(product), 2);
 
       const afterSet = await http()
-        .patch(`/cart/items/${product.id}`)
+        .patch(`/cart/items/${onlyVariant(product)}`)
         .set('Authorization', `Bearer ${customerToken}`)
         .send({ quantity: 5 })
         .expect(200);
       expect((afterSet.body as CartResponse).items[0].quantity).toBe(5);
 
       const afterRemove = await http()
-        .delete(`/cart/items/${product.id}`)
+        .delete(`/cart/items/${onlyVariant(product)}`)
         .set('Authorization', `Bearer ${customerToken}`)
         .expect(200);
       expect((afterRemove.body as CartResponse).items).toHaveLength(0);
 
-      await addToCart(customerToken, product.id, 1);
+      await addToCart(customerToken, onlyVariant(product), 1);
       const afterClear = await http()
         .delete('/cart')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -328,7 +358,7 @@ describe('Orders (e2e)', () => {
 
     it('never shows one user the cart of another', async () => {
       const product = await createProduct();
-      await addToCart(customerToken, product.id, 2);
+      await addToCart(customerToken, onlyVariant(product), 2);
 
       const other = await http()
         .get('/cart')
@@ -338,7 +368,7 @@ describe('Orders (e2e)', () => {
 
       // B adjusting A's item is a plain miss — B's cart has no such item.
       await http()
-        .patch(`/cart/items/${product.id}`)
+        .patch(`/cart/items/${onlyVariant(product)}`)
         .set('Authorization', `Bearer ${customerBToken}`)
         .send({ quantity: 9 })
         .expect(404);
@@ -346,7 +376,7 @@ describe('Orders (e2e)', () => {
 
     it('shows the live price after a catalog change — the cart locks nothing', async () => {
       const product = await createProduct();
-      await addToCart(customerToken, product.id, 1);
+      await addToCart(customerToken, onlyVariant(product), 1);
 
       await http()
         .patch(`/products/${product.id}`)
@@ -370,8 +400,8 @@ describe('Orders (e2e)', () => {
         priceCents: 2500,
       });
 
-      await addToCart(customerToken, shirt.id, 2);
-      await addToCart(customerToken, trousers.id, 1);
+      await addToCart(customerToken, onlyVariant(shirt), 2);
+      await addToCart(customerToken, onlyVariant(trousers), 1);
 
       const cart = await http()
         .get('/cart')
@@ -399,12 +429,12 @@ describe('Orders (e2e)', () => {
     it('carries the totals on every write, and zeroes them on clear', async () => {
       const product = await createProduct();
 
-      const added = await addToCart(customerToken, product.id, 2);
+      const added = await addToCart(customerToken, onlyVariant(product), 2);
       expect(added.itemsSubtotalCents).toBe(9980);
       expect(added.itemCount).toBe(2);
 
       const afterSet = await http()
-        .patch(`/cart/items/${product.id}`)
+        .patch(`/cart/items/${onlyVariant(product)}`)
         .set('Authorization', `Bearer ${customerToken}`)
         .send({ quantity: 5 })
         .expect(200);
@@ -421,7 +451,7 @@ describe('Orders (e2e)', () => {
 
     it('reprices the subtotal when the catalog moves under the cart', async () => {
       const product = await createProduct();
-      await addToCart(customerToken, product.id, 2);
+      await addToCart(customerToken, onlyVariant(product), 2);
 
       await http()
         .patch(`/products/${product.id}`)
@@ -444,8 +474,8 @@ describe('Orders (e2e)', () => {
     it('freezes the cart into a CREATED order: snapshot, total, stock, payment ref', async () => {
       const shirt = await createProduct({ name: 'Camiseta', priceCents: 1000 });
       const mug = await createProduct({ name: 'Caneca', priceCents: 2500 });
-      await addToCart(customerToken, shirt.id, 2);
-      await addToCart(customerToken, mug.id, 1);
+      await addToCart(customerToken, onlyVariant(shirt), 2);
+      await addToCart(customerToken, onlyVariant(mug), 1);
 
       const order = await checkedOutOrder(customerToken);
 
@@ -468,21 +498,25 @@ describe('Orders (e2e)', () => {
         expect.arrayContaining([
           expect.objectContaining({
             productId: shirt.id,
+            variantId: onlyVariant(shirt),
             productName: 'Camiseta',
+            variantLabel: 'Único',
             unitPriceCents: 1000,
             quantity: 2,
           }),
           expect.objectContaining({
             productId: mug.id,
+            variantId: onlyVariant(mug),
             productName: 'Caneca',
+            variantLabel: 'Único',
             unitPriceCents: 2500,
             quantity: 1,
           }),
         ]),
       );
 
-      await expect(stockOf(shirt.id)).resolves.toBe(8);
-      await expect(stockOf(mug.id)).resolves.toBe(9);
+      await expect(stockOf(onlyVariant(shirt))).resolves.toBe(8);
+      await expect(stockOf(onlyVariant(mug))).resolves.toBe(9);
 
       const cart = await http()
         .get('/cart')
@@ -493,7 +527,7 @@ describe('Orders (e2e)', () => {
 
     it('keeps the purchase-time price after the catalog moves on', async () => {
       const product = await createProduct({ priceCents: 4990 });
-      await addToCart(customerToken, product.id, 1);
+      await addToCart(customerToken, onlyVariant(product), 1);
       const order = await checkedOutOrder(customerToken);
 
       await http()
@@ -517,21 +551,30 @@ describe('Orders (e2e)', () => {
     it('409s naming the item when stock is insufficient, changing nothing', async () => {
       const scarce = await createProduct({ name: 'Raro', stockQuantity: 1 });
       const plenty = await createProduct({ name: 'Comum', stockQuantity: 10 });
-      await addToCart(customerToken, scarce.id, 2);
-      await addToCart(customerToken, plenty.id, 1);
+      await addToCart(customerToken, onlyVariant(scarce), 2);
+      await addToCart(customerToken, onlyVariant(plenty), 1);
 
       const response = await checkout(
         customerToken,
         await firstOption(customerToken),
       ).expect(409);
 
-      expect((response.body as { productIds: string[] }).productIds).toEqual([
-        scarce.id,
+      // The PIECE, not just an id: a storefront cannot strike anything
+      // through without knowing which size lost.
+      expect(
+        (response.body as { unavailableItems: unknown[] }).unavailableItems,
+      ).toEqual([
+        {
+          variantId: onlyVariant(scarce),
+          productId: scarce.id,
+          productName: 'Raro',
+          variantLabel: 'Único',
+        },
       ]);
       // Rolled back in one piece: no stock moved — not even the winnable
       // item's — and the cart survived intact.
-      await expect(stockOf(scarce.id)).resolves.toBe(1);
-      await expect(stockOf(plenty.id)).resolves.toBe(10);
+      await expect(stockOf(onlyVariant(scarce))).resolves.toBe(1);
+      await expect(stockOf(onlyVariant(plenty))).resolves.toBe(10);
       const cart = await http()
         .get('/cart')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -542,7 +585,7 @@ describe('Orders (e2e)', () => {
 
     it('409s when a cart item was archived after being added', async () => {
       const product = await createProduct();
-      await addToCart(customerToken, product.id, 1);
+      await addToCart(customerToken, onlyVariant(product), 1);
 
       await http()
         .delete(`/products/${product.id}`)
@@ -552,9 +595,10 @@ describe('Orders (e2e)', () => {
       // Quoted while the product was still sellable, which is exactly the
       // race this 409 is about.
       const response = await checkout(customerToken, UNUSED_OPTION).expect(409);
-      expect((response.body as { productIds: string[] }).productIds).toEqual([
-        product.id,
-      ]);
+      expect(
+        (response.body as { unavailableItems: { productId: string }[] })
+          .unavailableItems,
+      ).toEqual([expect.objectContaining({ productId: product.id })]);
     });
 
     it('409s an empty cart and 400s a checkout without an address', async () => {
@@ -571,7 +615,7 @@ describe('Orders (e2e)', () => {
 
     it('produces exactly one order from two concurrent checkouts of the same cart', async () => {
       const product = await createProduct();
-      await addToCart(customerToken, product.id, 1);
+      await addToCart(customerToken, onlyVariant(product), 1);
 
       const option = await firstOption(customerToken);
       const [first, second] = await Promise.all([
@@ -584,7 +628,224 @@ describe('Orders (e2e)', () => {
       // depends on scheduling; that exactly one wins does not.
       expect([first.status, second.status].sort()).toEqual([201, 409]);
       await expect(prisma.order.count()).resolves.toBe(1);
-      await expect(stockOf(product.id)).resolves.toBe(9);
+      await expect(stockOf(onlyVariant(product))).resolves.toBe(9);
+    });
+  });
+
+  /**
+   * Covers docs/specs/product-variants.md where it crosses the cart and the
+   * order: the size is the sellable unit, and the two claims that only a real
+   * database can settle — the right variant loses stock, and two buyers racing
+   * for the last M produce exactly one order.
+   */
+  describe('variants', () => {
+    /** A shirt in five sizes, in the order a size selector renders them. */
+    async function shirtInSizes(
+      stock: Record<string, number> = { P: 2, M: 2, G: 2, GG: 2, XGG: 2 },
+    ): Promise<ProductResponse> {
+      return createProduct({
+        name: 'Camiseta Preta',
+        variants: ['P', 'M', 'G', 'GG', 'XGG'].map((label) => ({
+          label,
+          stockQuantity: stock[label] ?? 0,
+        })),
+      });
+    }
+
+    function sizeOf(product: ProductResponse, label: string): string {
+      const variant = product.variants.find((v) => v.label === label);
+      if (!variant) {
+        throw new Error(`This fixture has no ${label}`);
+      }
+      return variant.id;
+    }
+
+    it('orders sizes by position, not alphabetically, and keeps sold-out ones', async () => {
+      const shirt = await shirtInSizes({ P: 2, M: 0, G: 2, GG: 2, XGG: 2 });
+
+      const response = await http().get(`/products/${shirt.id}`).expect(200);
+      const body = response.body as ProductResponse;
+
+      // Alphabetically this would be G, GG, M, P, XGG — which is why the
+      // column exists.
+      expect(body.variants.map((variant) => variant.label)).toEqual([
+        'P',
+        'M',
+        'G',
+        'GG',
+        'XGG',
+      ]);
+      // The sold-out M is present with zero, not missing: struck through in
+      // the storefront, never hidden.
+      expect(body.variants[1]).toMatchObject({ label: 'M', stockQuantity: 0 });
+      // The product's own number is the sum, for the grid's "Esgotado".
+      expect(body.stockQuantity).toBe(8);
+    });
+
+    it('keeps two sizes of one shirt as two cart lines and two order lines', async () => {
+      const shirt = await shirtInSizes();
+
+      await addToCart(customerToken, sizeOf(shirt, 'P'), 1);
+      const cart = await addToCart(customerToken, sizeOf(shirt, 'M'), 2);
+
+      expect(cart.items).toHaveLength(2);
+      // Compared as a SET: cart lines come back ordered by cart_items.id, a
+      // random UUID, so the order between two lines is stable per cart but
+      // meaningless. Recorded in docs/known-issues.md; a storefront that
+      // wants P before M sorts on variant.position itself.
+      expect(cart.items.map((item) => item.variant.label).sort()).toEqual([
+        'M',
+        'P',
+      ]);
+      expect(cart.itemCount).toBe(3);
+
+      const order = await checkedOutOrder(customerToken);
+
+      expect(order.items).toHaveLength(2);
+      expect(order.items.map((item) => item.variantLabel).sort()).toEqual([
+        'M',
+        'P',
+      ]);
+      // The label is frozen beside the name and the price.
+      expect(
+        order.items.every((item) => item.productName === 'Camiseta Preta'),
+      ).toBe(true);
+    });
+
+    it('decrements the size that was bought and leaves its siblings alone', async () => {
+      const shirt = await shirtInSizes({ P: 5, M: 5, G: 5, GG: 5, XGG: 5 });
+      await addToCart(customerToken, sizeOf(shirt, 'M'), 2);
+
+      await checkedOutOrder(customerToken);
+
+      await expect(stockOf(sizeOf(shirt, 'M'))).resolves.toBe(3);
+      await expect(stockOf(sizeOf(shirt, 'P'))).resolves.toBe(5);
+      await expect(stockOf(sizeOf(shirt, 'G'))).resolves.toBe(5);
+    });
+
+    it('409s naming the size that ran out, not the product', async () => {
+      const shirt = await shirtInSizes({ P: 10, M: 1, G: 10, GG: 10, XGG: 10 });
+      await addToCart(customerToken, sizeOf(shirt, 'M'), 2);
+
+      const response = await checkout(
+        customerToken,
+        await firstOption(customerToken),
+      ).expect(409);
+
+      expect(
+        (response.body as { unavailableItems: unknown[] }).unavailableItems,
+      ).toEqual([
+        {
+          variantId: sizeOf(shirt, 'M'),
+          productId: shirt.id,
+          productName: 'Camiseta Preta',
+          variantLabel: 'M',
+        },
+      ]);
+      // Nothing moved: not the M, and not the sizes that would have won.
+      await expect(stockOf(sizeOf(shirt, 'M'))).resolves.toBe(1);
+      await expect(prisma.order.count()).resolves.toBe(0);
+    });
+
+    it('produces exactly one order from two buyers racing for the last M', async () => {
+      const shirt = await shirtInSizes({ P: 5, M: 1, G: 5, GG: 5, XGG: 5 });
+      await addToCart(customerToken, sizeOf(shirt, 'M'), 1);
+      await addToCart(customerBToken, sizeOf(shirt, 'M'), 1);
+
+      const option = await firstOption(customerToken);
+      const [first, second] = await Promise.all([
+        checkout(customerToken, option),
+        checkout(customerBToken, option),
+      ]);
+
+      // Two DIFFERENT carts this time, so the cart-consumption guard cannot
+      // be what settles it: the winner is decided by the conditional UPDATE
+      // on the variant's stock, inside Postgres.
+      expect([first.status, second.status].sort()).toEqual([201, 409]);
+      await expect(prisma.order.count()).resolves.toBe(1);
+      await expect(stockOf(sizeOf(shirt, 'M'))).resolves.toBe(0);
+    });
+
+    it('restocks the right size when the order is cancelled', async () => {
+      const shirt = await shirtInSizes({ P: 5, M: 5, G: 5, GG: 5, XGG: 5 });
+      await addToCart(customerToken, sizeOf(shirt, 'GG'), 2);
+      const order = await checkedOutOrder(customerToken);
+      await expect(stockOf(sizeOf(shirt, 'GG'))).resolves.toBe(3);
+
+      await transition(order.id, 'cancel', customerToken);
+
+      await expect(stockOf(sizeOf(shirt, 'GG'))).resolves.toBe(5);
+      await expect(stockOf(sizeOf(shirt, 'M'))).resolves.toBe(5);
+    });
+
+    it('gives a product created without variants exactly one, labelled Unico', async () => {
+      const product = await createProduct({ variants: undefined });
+
+      const response = await http().get(`/products/${product.id}`).expect(200);
+      const body = response.body as ProductResponse;
+
+      // Never zero: a product with no variant is unbuyable, and the fork
+      // "product with / without variants" is what this rule prevents.
+      expect(body.variants).toHaveLength(1);
+      expect(body.variants[0]).toMatchObject({ label: 'Único', position: 0 });
+    });
+
+    it('sets stock on one size only, through the variant route', async () => {
+      const shirt = await shirtInSizes({ P: 5, M: 5, G: 5, GG: 5, XGG: 5 });
+
+      const response = await http()
+        .patch(`/products/${shirt.id}/variants/${sizeOf(shirt, 'G')}/stock`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ quantity: 12 })
+        .expect(200);
+
+      const body = response.body as ProductResponse;
+      expect(
+        body.variants.find((variant) => variant.label === 'G')?.stockQuantity,
+      ).toBe(12);
+      expect(
+        body.variants.find((variant) => variant.label === 'M')?.stockQuantity,
+      ).toBe(5);
+      // 5 + 5 + 12 + 5 + 5 — the product's number follows its sizes.
+      expect(body.stockQuantity).toBe(32);
+    });
+
+    it('404s a variant addressed under a product that does not own it', async () => {
+      const shirt = await shirtInSizes();
+      const other = await createProduct({ name: 'Outra Peça' });
+
+      await http()
+        .patch(`/products/${other.id}/variants/${sizeOf(shirt, 'M')}/stock`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ quantity: 1 })
+        .expect(404);
+    });
+
+    it('adds a size afterwards and refuses a duplicate label', async () => {
+      const shirt = await shirtInSizes();
+
+      const response = await http()
+        .post(`/products/${shirt.id}/variants`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ label: 'XXG', stockQuantity: 3 })
+        .expect(201);
+
+      const body = response.body as ProductResponse;
+      // Appended to the end, which is where a new size almost always goes.
+      expect(body.variants.map((variant) => variant.label)).toEqual([
+        'P',
+        'M',
+        'G',
+        'GG',
+        'XGG',
+        'XXG',
+      ]);
+
+      await http()
+        .post(`/products/${shirt.id}/variants`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ label: 'M' })
+        .expect(409);
     });
   });
 
@@ -593,7 +854,7 @@ describe('Orders (e2e)', () => {
       const product = await createProduct({
         name: `Produto ${String(Math.random()).slice(2, 8)}`,
       });
-      await addToCart(token, product.id, 2);
+      await addToCart(token, onlyVariant(product), 2);
       return checkedOutOrder(token);
     }
 
@@ -632,15 +893,15 @@ describe('Orders (e2e)', () => {
 
     it('lets a customer cancel their own CREATED order, restocking it', async () => {
       const product = await createProduct({ stockQuantity: 10 });
-      await addToCart(customerToken, product.id, 2);
+      await addToCart(customerToken, onlyVariant(product), 2);
       const order = await checkedOutOrder(customerToken);
-      await expect(stockOf(product.id)).resolves.toBe(8);
+      await expect(stockOf(onlyVariant(product))).resolves.toBe(8);
 
       const cancelled = await transition(order.id, 'cancel', customerToken);
 
       expect(cancelled.status).toBe(OrderStatus.CANCELLED);
       expect(cancelled.cancelledAt).not.toBeNull();
-      await expect(stockOf(product.id)).resolves.toBe(10);
+      await expect(stockOf(onlyVariant(product))).resolves.toBe(10);
     });
 
     it('409s cancelling once the order is PAID — refunds do not exist yet', async () => {
@@ -668,7 +929,7 @@ describe('Orders (e2e)', () => {
   describe('ownership and listing', () => {
     it("404s a customer reading someone else's order; orders.read reads it", async () => {
       const product = await createProduct();
-      await addToCart(customerToken, product.id, 1);
+      await addToCart(customerToken, onlyVariant(product), 1);
       const order = await checkedOutOrder(customerToken);
 
       await http()
@@ -685,9 +946,9 @@ describe('Orders (e2e)', () => {
 
     it('lists own orders for customers, everything (with filters) for orders.read', async () => {
       const product = await createProduct({ stockQuantity: 20 });
-      await addToCart(customerToken, product.id, 1);
+      await addToCart(customerToken, onlyVariant(product), 1);
       await checkedOutOrder(customerToken);
-      await addToCart(customerBToken, product.id, 1);
+      await addToCart(customerBToken, onlyVariant(product), 1);
       const orderB = await checkedOutOrder(customerBToken);
       await transition(orderB.id, 'mark-paid', operatorToken);
 
