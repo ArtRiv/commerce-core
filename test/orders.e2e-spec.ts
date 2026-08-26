@@ -31,6 +31,8 @@ interface CartResponse {
       stockQuantity: number;
     };
   }[];
+  itemsSubtotalCents: number;
+  itemCount: number;
 }
 
 interface ShippingOptionResponse {
@@ -38,6 +40,7 @@ interface ShippingOptionResponse {
   label: string;
   priceCents: number;
   estimatedDays: number | null;
+  orderTotalCents: number;
 }
 
 interface OrderResponse {
@@ -212,6 +215,7 @@ describe('Orders (e2e)', () => {
     label: 'Entrega padrão',
     priceCents: 0,
     estimatedDays: null,
+    orderTotalCents: 0,
   };
 
   async function stockOf(productId: string): Promise<number> {
@@ -357,6 +361,82 @@ describe('Orders (e2e)', () => {
       expect((cart.body as CartResponse).items[0].product.priceCents).toBe(
         6990,
       );
+    });
+
+    it('totals the cart server-side, in pieces and in cents', async () => {
+      const shirt = await createProduct();
+      const trousers = await createProduct({
+        name: 'Calça Preta',
+        priceCents: 2500,
+      });
+
+      await addToCart(customerToken, shirt.id, 2);
+      await addToCart(customerToken, trousers.id, 1);
+
+      const cart = await http()
+        .get('/cart')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+
+      const body = cart.body as CartResponse;
+      expect(body.itemsSubtotalCents).toBe(4990 * 2 + 2500);
+      // Pieces, not lines: three garments across two lines is 3.
+      expect(body.itemCount).toBe(3);
+    });
+
+    it('answers zero, not null, for a cart that never existed', async () => {
+      const cart = await http()
+        .get('/cart')
+        .set('Authorization', `Bearer ${customerBToken}`)
+        .expect(200);
+
+      const body = cart.body as CartResponse;
+      expect(body.items).toHaveLength(0);
+      expect(body.itemsSubtotalCents).toBe(0);
+      expect(body.itemCount).toBe(0);
+    });
+
+    it('carries the totals on every write, and zeroes them on clear', async () => {
+      const product = await createProduct();
+
+      const added = await addToCart(customerToken, product.id, 2);
+      expect(added.itemsSubtotalCents).toBe(9980);
+      expect(added.itemCount).toBe(2);
+
+      const afterSet = await http()
+        .patch(`/cart/items/${product.id}`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({ quantity: 5 })
+        .expect(200);
+      expect((afterSet.body as CartResponse).itemsSubtotalCents).toBe(24950);
+      expect((afterSet.body as CartResponse).itemCount).toBe(5);
+
+      const afterClear = await http()
+        .delete('/cart')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+      expect((afterClear.body as CartResponse).itemsSubtotalCents).toBe(0);
+      expect((afterClear.body as CartResponse).itemCount).toBe(0);
+    });
+
+    it('reprices the subtotal when the catalog moves under the cart', async () => {
+      const product = await createProduct();
+      await addToCart(customerToken, product.id, 2);
+
+      await http()
+        .patch(`/products/${product.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ priceCents: 6990 })
+        .expect(200);
+
+      const cart = await http()
+        .get('/cart')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+
+      // The subtotal follows the live price, because that is the price
+      // checkout is about to freeze and charge.
+      expect((cart.body as CartResponse).itemsSubtotalCents).toBe(13980);
     });
   });
 

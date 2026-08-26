@@ -13,6 +13,7 @@ import {
   type ShippingProvider,
 } from '../shipping/shipping-provider';
 import { CartService } from './cart.service';
+import { itemsSubtotalCents } from './money';
 
 /** A line to be priced: catalog data already read, weight not yet resolved. */
 export interface QuotableItem {
@@ -24,19 +25,23 @@ export interface QuotableItem {
 }
 
 /**
- * The one definition of an order's item subtotal.
+ * A quoted option with the number a checkout screen actually renders.
  *
- * Exported so checkout freezes the same number the quote was measured
- * against — two subtly different sums would put the free-shipping threshold
- * and the stored subtotal out of step.
+ * `orderTotalCents` is the subtotal plus this option's freight — what
+ * POST /orders will charge if the customer picks it. Computing it here rather
+ * than in the browser is the point: it is the same arithmetic checkout does,
+ * so a drift between the two is a bug with a test on it, not a rounding
+ * difference nobody notices (docs/specs/cart-totals.md).
  */
-export function itemsSubtotalCents(
-  items: readonly { unitPriceCents: number; quantity: number }[],
-): number {
-  return items.reduce(
-    (sum, item) => sum + item.unitPriceCents * item.quantity,
-    0,
-  );
+export interface QuotedOption extends ShippingOption {
+  orderTotalCents: number;
+}
+
+/** What the quote endpoint answers: the priced cart and its options. */
+export interface CartQuote {
+  options: QuotedOption[];
+  /** The same number GET /cart reports, measured over the same cart. */
+  itemsSubtotalCents: number;
 }
 
 /**
@@ -60,11 +65,15 @@ export class ShippingQuoteService {
     private readonly defaultWeightGrams: number,
   ) {}
 
-  /** The quote endpoint: the caller's own cart, priced to a postal code. */
-  async quoteForCart(
-    userId: string,
-    postalCode: string,
-  ): Promise<ShippingOption[]> {
+  /**
+   * The quote endpoint: the caller's own cart, priced to a postal code.
+   *
+   * Answers with the cart's item subtotal beside the options, and stamps each
+   * option with the order total it implies. The route already had to read the
+   * cart to weigh it, so it already knew both numbers — leaving them out only
+   * ever meant a storefront adding money in JavaScript.
+   */
+  async quoteForCart(userId: string, postalCode: string): Promise<CartQuote> {
     const cart = await this.carts.getCart(userId);
 
     if (cart.items.length === 0) {
@@ -73,7 +82,7 @@ export class ShippingQuoteService {
       throw new ConflictException('Cart is empty');
     }
 
-    return this.quote(
+    const options = await this.quote(
       postalCode,
       cart.items.map((item) => ({
         productId: item.productId,
@@ -82,6 +91,20 @@ export class ShippingQuoteService {
         weightGrams: item.product.weightGrams,
       })),
     );
+
+    // The cart's own subtotal, not a second sum computed here: one definition
+    // (money.ts), measured once, reported by both routes.
+    const { itemsSubtotalCents: subtotalCents } = cart;
+
+    return {
+      itemsSubtotalCents: subtotalCents,
+      options: options.map((option) => ({
+        ...option,
+        // Free shipping is a price of zero, so this is simply the subtotal —
+        // an option at no cost, not a missing number.
+        orderTotalCents: subtotalCents + option.priceCents,
+      })),
+    };
   }
 
   /**

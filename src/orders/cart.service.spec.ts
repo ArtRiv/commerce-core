@@ -77,7 +77,9 @@ describe('CartService', () => {
 
       const cart = await serviceWith(prisma, products).getCart('user-1');
 
-      expect(cart).toEqual({ items: [] });
+      // Zero, not null and not absent: a badge that has to handle undefined
+      // is a badly written contract (docs/specs/cart-totals.md).
+      expect(cart).toEqual({ items: [], itemsSubtotalCents: 0, itemCount: 0 });
       expect(products.findByIds).not.toHaveBeenCalled();
     });
 
@@ -100,6 +102,47 @@ describe('CartService', () => {
         { productId: 'product-1', quantity: 2, product: live },
       ]);
       expect(products.findByIds).toHaveBeenCalledWith(['product-1']);
+    });
+
+    it('totals the lines server-side, in pieces and in cents', async () => {
+      const prisma = createPrismaMock();
+      const products = createProductsMock();
+      prisma.cart.findUnique.mockResolvedValue({
+        id: 'cart-1',
+        userId: 'user-1',
+        items: [
+          { productId: 'product-1', quantity: 2 },
+          { productId: 'product-2', quantity: 1 },
+        ],
+      });
+      products.findByIds.mockResolvedValue([
+        sellable({ id: 'product-1', priceCents: 4990 }),
+        sellable({ id: 'product-2', priceCents: 2500 }),
+      ]);
+
+      const cart = await serviceWith(prisma, products).getCart('user-1');
+
+      expect(cart.itemsSubtotalCents).toBe(12_480);
+      // Pieces, not lines: three garments in two lines is 3 on the badge.
+      expect(cart.itemCount).toBe(3);
+    });
+
+    it('follows the live price when the catalog moves under the cart', async () => {
+      const prisma = createPrismaMock();
+      const products = createProductsMock();
+      prisma.cart.findUnique.mockResolvedValue({
+        id: 'cart-1',
+        userId: 'user-1',
+        items: [{ productId: 'product-1', quantity: 2 }],
+      });
+      // The line was added at 4990; the back office has since repriced it.
+      products.findByIds.mockResolvedValue([sellable({ priceCents: 5990 })]);
+
+      const cart = await serviceWith(prisma, products).getCart('user-1');
+
+      // The cart holds no money — it reports what the catalog says now,
+      // which is what checkout will freeze and charge.
+      expect(cart.itemsSubtotalCents).toBe(11_980);
     });
   });
 
@@ -261,7 +304,11 @@ describe('CartService', () => {
       });
 
       const cleared = await serviceWith(prisma, products).clear('user-1');
-      expect(cleared).toEqual({ items: [] });
+      expect(cleared).toEqual({
+        items: [],
+        itemsSubtotalCents: 0,
+        itemCount: 0,
+      });
       const [args] = prisma.cartItem.deleteMany.mock.calls[0] as [
         { where: { cartId: string } },
       ];
@@ -271,7 +318,7 @@ describe('CartService', () => {
       const empty = await serviceWith(prisma, products).clear('user-2');
       // Clearing a cart that never existed is success, not an error — the
       // caller asked for an empty cart and has one.
-      expect(empty).toEqual({ items: [] });
+      expect(empty).toEqual({ items: [], itemsSubtotalCents: 0, itemCount: 0 });
     });
   });
 });

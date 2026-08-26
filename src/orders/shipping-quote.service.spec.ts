@@ -7,10 +7,8 @@ import type {
   ShippingQuoteRequest,
 } from '../shipping/shipping-provider';
 import type { CartService, CartView } from './cart.service';
-import {
-  itemsSubtotalCents,
-  ShippingQuoteService,
-} from './shipping-quote.service';
+import { itemCount, itemsSubtotalCents } from './money';
+import { ShippingQuoteService } from './shipping-quote.service';
 
 const DEFAULT_WEIGHT_GRAMS = 500;
 
@@ -45,9 +43,19 @@ function cartItem(
 
 function createMocks(items: CartView['items'] = [cartItem('p1', 2, 1_000)]) {
   const carts = {
-    getCart: jest
-      .fn<Promise<CartView>, [string]>()
-      .mockResolvedValue({ items }),
+    getCart: jest.fn<Promise<CartView>, [string]>().mockResolvedValue({
+      items,
+      // Computed rather than hardcoded: the double must agree with the real
+      // CartService, or these tests would prove the quote against a cart
+      // shape that does not exist.
+      itemsSubtotalCents: itemsSubtotalCents(
+        items.map((item) => ({
+          unitPriceCents: item.product.priceCents,
+          quantity: item.quantity,
+        })),
+      ),
+      itemCount: itemCount(items),
+    }),
   };
   const provider = {
     quote: jest
@@ -66,21 +74,6 @@ function serviceWith(mocks: ReturnType<typeof createMocks>) {
   );
 }
 
-describe('itemsSubtotalCents', () => {
-  it('sums price × quantity', () => {
-    expect(
-      itemsSubtotalCents([
-        { unitPriceCents: 1_000, quantity: 2 },
-        { unitPriceCents: 2_500, quantity: 1 },
-      ]),
-    ).toBe(4_500);
-  });
-
-  it('is zero for nothing', () => {
-    expect(itemsSubtotalCents([])).toBe(0);
-  });
-});
-
 describe('ShippingQuoteService', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -93,7 +86,7 @@ describe('ShippingQuoteService', () => {
         cartItem('p2', 1, 2_500),
       ]);
 
-      const options = await serviceWith(mocks).quoteForCart(
+      const quote = await serviceWith(mocks).quoteForCart(
         'user-1',
         '80000-000',
       );
@@ -118,7 +111,30 @@ describe('ShippingQuoteService', () => {
           },
         ],
       });
-      expect(options).toEqual([OPTION]);
+      expect(quote.itemsSubtotalCents).toBe(4_500);
+      // Every option carries what the order will cost, so a checkout screen
+      // can render "Finalizar pedido — R$ 64,90" without adding two numbers
+      // in the browser (docs/specs/cart-totals.md).
+      expect(quote.options).toEqual([
+        { ...OPTION, orderTotalCents: 4_500 + OPTION.priceCents },
+      ]);
+    });
+
+    it('makes orderTotalCents equal the subtotal on a free option', async () => {
+      const mocks = createMocks([cartItem('p1', 2, 1_000)]);
+      mocks.provider.quote.mockResolvedValue([
+        { ...OPTION, code: 'retirada', priceCents: 0 },
+      ]);
+
+      const quote = await serviceWith(mocks).quoteForCart(
+        'user-1',
+        '80000-000',
+      );
+
+      // Free shipping is a price of zero, not a missing price: the order
+      // total is exactly the items.
+      expect(quote.itemsSubtotalCents).toBe(2_000);
+      expect(quote.options[0].orderTotalCents).toBe(2_000);
     });
 
     it('409s an empty cart rather than quoting nothing', async () => {
@@ -136,9 +152,11 @@ describe('ShippingQuoteService', () => {
       const mocks = createMocks();
       mocks.provider.quote.mockResolvedValue([]);
 
+      // No options is still a priced cart: the subtotal is a fact about the
+      // cart, not about whether anyone will carry it.
       await expect(
         serviceWith(mocks).quoteForCart('user-1', '99999-999'),
-      ).resolves.toEqual([]);
+      ).resolves.toEqual({ options: [], itemsSubtotalCents: 2_000 });
     });
   });
 

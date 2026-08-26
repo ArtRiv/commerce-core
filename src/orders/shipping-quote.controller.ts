@@ -22,6 +22,7 @@ const QUOTE_DESCRIPTION = [
   'The postal code alone determines the price: in Brazil the CEP fixes city and state, and it is what carriers quote against. City and state still travel in the order address, to print a label, but they never feed the price.',
   'An **empty `options` list is a legitimate 200**, not an error: "nothing can carry this, to there" is a fact about the address and the cart, and retrying will not change it. A provider that is merely unreachable answers 503 instead — the two are kept apart on purpose, because one is worth retrying and the other never is.',
   'Take the `code` of the option the customer picks and send it to POST /orders as `shippingOptionCode`, along with the `priceCents` you displayed as `quotedShippingCents`.',
+  'The response carries the money as well as the options: `itemsSubtotalCents` for the cart, and `orderTotalCents` on every option — the exact amount that option will be charged, which is the same number POST /orders answers with as `totalCents`. Render it directly; do not add two numbers in the browser.',
   'POST rather than GET despite being a read: a postal code is personal data, and query strings end up in access logs and browser history.',
 ].join('\n\n');
 
@@ -62,12 +63,13 @@ export class ShippingQuoteController {
   @ApiServiceUnavailable(
     'The shipping provider is unreachable. Distinct from an empty option list, which is a 200.',
   )
-  async quote(
+  quote(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: ShippingQuoteDto,
   ): Promise<ShippingQuoteResponse> {
     // An empty list is a legitimate 200: "we do not deliver there" is an
-    // answer about the address, not a failure of the request.
-    return { options: await this.quotes.quoteForCart(user.id, dto.postalCode) };
+    // answer about the address, not a failure of the request. The subtotal
+    // comes back either way — it describes the cart, not the delivery.
+    return this.quotes.quoteForCart(user.id, dto.postalCode);
   }
 }

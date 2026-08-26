@@ -56,9 +56,28 @@ export class CartItemResponse {
 /**
  * No id and no owner field: there is only ever the caller's cart, and it is
  * created lazily on the first add. An empty or not-yet-existing cart is the
- * same `{ items: [] }`, which is why no cart route answers 404.
+ * same empty list with both totals at zero, which is why no cart route
+ * answers 404.
+ *
+ * The totals are computed here, not in the client. Summing money in a browser
+ * is a backend gap wearing a frontend costume — every store that deploys this
+ * core has a cart with a total in it (docs/specs/cart-totals.md).
  */
 export class CartResponse {
   @ApiProperty({ type: [CartItemResponse] })
   items: CartItemResponse[];
+
+  @ApiProperty({
+    description:
+      'Sum of `product.priceCents × quantity` over the lines, in cents, computed server-side against LIVE catalogue prices. Reprice a product and this follows on the next read — the cart freezes nothing; checkout does. An empty cart is `0`, never null and never absent.',
+    example: 12480,
+  })
+  itemsSubtotalCents: number;
+
+  @ApiProperty({
+    description:
+      'Sum of quantities — pieces, not lines. This is the cart badge: two shirts and a pair of trousers is 3, not 2. An empty cart is `0`.',
+    example: 3,
+  })
+  itemCount: number;
 }

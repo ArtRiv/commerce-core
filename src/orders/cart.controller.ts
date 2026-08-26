@@ -40,7 +40,7 @@ export class CartController {
   @ApiOperation({
     summary: 'Get the current cart',
     description:
-      'Always succeeds for an authenticated caller. A user who has never added anything gets `{ "items": [] }` rather than a 404 — the cart is created lazily on the first add, and its absence is not an error.\n\nProduct data on each line is read **live from the catalog**, not frozen: price, status and stock are current as of this request. That is what lets a storefront warn "only 2 left" or "no longer available". Prices freeze at checkout and not before.',
+      'Always succeeds for an authenticated caller. A user who has never added anything gets an empty cart with both totals at `0` rather than a 404 — the cart is created lazily on the first add, and its absence is not an error.\n\nProduct data on each line is read **live from the catalog**, not frozen: price, status and stock are current as of this request. That is what lets a storefront warn "only 2 left" or "no longer available". Prices freeze at checkout and not before.\n\n`itemsSubtotalCents` and `itemCount` are computed here from those same live prices, so no client has to sum money. There is deliberately **no order total** on this route: without a postal code there is no freight, and a "total" that is missing the freight is precisely the number a checkout must never show. That one comes from POST /shipping/quote, as `orderTotalCents` per option.',
   })
   @ApiOkResponse({ type: CartResponse })
   get(@CurrentUser() user: AuthenticatedUser) {

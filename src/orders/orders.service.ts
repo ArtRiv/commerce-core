@@ -21,11 +21,9 @@ import {
   type PaymentSession,
 } from '../payments/payment-provider';
 import { PrismaService } from '../prisma/prisma.service';
+import { itemsSubtotalCents } from './money';
 import { OrderNotificationsService } from './order-notifications.service';
-import {
-  itemsSubtotalCents,
-  ShippingQuoteService,
-} from './shipping-quote.service';
+import { ShippingQuoteService } from './shipping-quote.service';
 
 export interface ShippingAddress {
   line1: string;

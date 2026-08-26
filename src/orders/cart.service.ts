@@ -7,6 +7,7 @@ import {
 import { ProductsService } from '../catalog/products.service';
 import { ProductStatus } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
+import { itemCount, itemsSubtotalCents } from './money';
 
 /** What findByIds exposes — the sellable slice of a product. */
 export interface LiveProduct {
@@ -32,7 +33,24 @@ export interface CartView {
      */
     product: LiveProduct;
   }[];
+
+  /**
+   * Sum of product.priceCents × quantity over the lines, measured server-side
+   * against LIVE catalogue prices. Money arithmetic belongs here, not in a
+   * browser (docs/specs/cart-totals.md), and an empty cart is 0 — never null,
+   * never absent.
+   */
+  itemsSubtotalCents: number;
+
+  /** Sum of quantities — the cart badge. Pieces, not lines. */
+  itemCount: number;
 }
+
+const EMPTY_CART: CartView = {
+  items: [],
+  itemsSubtotalCents: 0,
+  itemCount: 0,
+};
 
 const MAX_ITEM_QUANTITY = 999;
 
@@ -56,7 +74,7 @@ export class CartService {
     });
 
     if (!cart || cart.items.length === 0) {
-      return { items: [] };
+      return { ...EMPTY_CART };
     }
 
     const products = await this.products.findByIds(
@@ -64,14 +82,25 @@ export class CartService {
     );
     const byId = new Map(products.map((product) => [product.id, product]));
 
+    const items = cart.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      // The FK guarantees the row exists; a miss would be schema drift
+      // worth crashing on, hence the non-null assertion via lookup+throw.
+      product: byId.get(item.productId) as LiveProduct,
+    }));
+
     return {
-      items: cart.items.map((item) => ({
-        productId: item.productId,
-        quantity: item.quantity,
-        // The FK guarantees the row exists; a miss would be schema drift
-        // worth crashing on, hence the non-null assertion via lookup+throw.
-        product: byId.get(item.productId) as LiveProduct,
-      })),
+      items,
+      // The same function checkout uses to freeze itemsSubtotalCents onto the
+      // order, so what is displayed and what is charged cannot drift apart.
+      itemsSubtotalCents: itemsSubtotalCents(
+        items.map((item) => ({
+          unitPriceCents: item.product.priceCents,
+          quantity: item.quantity,
+        })),
+      ),
+      itemCount: itemCount(items),
     };
   }
 
@@ -157,7 +186,7 @@ export class CartService {
       await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
     }
 
-    return { items: [] };
+    return { ...EMPTY_CART };
   }
 
   private async findCartOrThrow(userId: string): Promise<{ id: string }> {

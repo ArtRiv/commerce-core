@@ -1358,7 +1358,7 @@
     },
     "/cart": {
       "get": {
-        "description": "Always succeeds for an authenticated caller. A user who has never added anything gets `{ \"items\": [] }` rather than a 404 — the cart is created lazily on the first add, and its absence is not an error.\n\nProduct data on each line is read **live from the catalog**, not frozen: price, status and stock are current as of this request. That is what lets a storefront warn \"only 2 left\" or \"no longer available\". Prices freeze at checkout and not before.",
+        "description": "Always succeeds for an authenticated caller. A user who has never added anything gets an empty cart with both totals at `0` rather than a 404 — the cart is created lazily on the first add, and its absence is not an error.\n\nProduct data on each line is read **live from the catalog**, not frozen: price, status and stock are current as of this request. That is what lets a storefront warn \"only 2 left\" or \"no longer available\". Prices freeze at checkout and not before.\n\n`itemsSubtotalCents` and `itemCount` are computed here from those same live prices, so no client has to sum money. There is deliberately **no order total** on this route: without a postal code there is no freight, and a \"total\" that is missing the freight is precisely the number a checkout must never show. That one comes from POST /shipping/quote, as `orderTotalCents` per option.",
         "operationId": "CartController_get",
         "parameters": [],
         "responses": {
@@ -2481,7 +2481,7 @@
     },
     "/shipping/quote": {
       "post": {
-        "description": "Prices freight for the caller's own cart to a destination postal code. There is no cart id and no item list in the request — the cart is whichever one the token belongs to.\n\nThe postal code alone determines the price: in Brazil the CEP fixes city and state, and it is what carriers quote against. City and state still travel in the order address, to print a label, but they never feed the price.\n\nAn **empty `options` list is a legitimate 200**, not an error: \"nothing can carry this, to there\" is a fact about the address and the cart, and retrying will not change it. A provider that is merely unreachable answers 503 instead — the two are kept apart on purpose, because one is worth retrying and the other never is.\n\nTake the `code` of the option the customer picks and send it to POST /orders as `shippingOptionCode`, along with the `priceCents` you displayed as `quotedShippingCents`.\n\nPOST rather than GET despite being a read: a postal code is personal data, and query strings end up in access logs and browser history.",
+        "description": "Prices freight for the caller's own cart to a destination postal code. There is no cart id and no item list in the request — the cart is whichever one the token belongs to.\n\nThe postal code alone determines the price: in Brazil the CEP fixes city and state, and it is what carriers quote against. City and state still travel in the order address, to print a label, but they never feed the price.\n\nAn **empty `options` list is a legitimate 200**, not an error: \"nothing can carry this, to there\" is a fact about the address and the cart, and retrying will not change it. A provider that is merely unreachable answers 503 instead — the two are kept apart on purpose, because one is worth retrying and the other never is.\n\nTake the `code` of the option the customer picks and send it to POST /orders as `shippingOptionCode`, along with the `priceCents` you displayed as `quotedShippingCents`.\n\nThe response carries the money as well as the options: `itemsSubtotalCents` for the cart, and `orderTotalCents` on every option — the exact amount that option will be charged, which is the same number POST /orders answers with as `totalCents`. Render it directly; do not add two numbers in the browser.\n\nPOST rather than GET despite being a read: a postal code is personal data, and query strings end up in access logs and browser history.",
         "operationId": "ShippingQuoteController_quote",
         "parameters": [],
         "requestBody": {
@@ -3288,10 +3288,22 @@
             "items": {
               "$ref": "#/components/schemas/CartItemResponse"
             }
+          },
+          "itemsSubtotalCents": {
+            "type": "number",
+            "description": "Sum of `product.priceCents × quantity` over the lines, in cents, computed server-side against LIVE catalogue prices. Reprice a product and this follows on the next read — the cart freezes nothing; checkout does. An empty cart is `0`, never null and never absent.",
+            "example": 12480
+          },
+          "itemCount": {
+            "type": "number",
+            "description": "Sum of quantities — pieces, not lines. This is the cart badge: two shirts and a pair of trousers is 3, not 2. An empty cart is `0`.",
+            "example": 3
           }
         },
         "required": [
-          "items"
+          "items",
+          "itemsSubtotalCents",
+          "itemCount"
         ]
       },
       "AddCartItemDto": {
@@ -3970,6 +3982,11 @@
             "type": "string",
             "nullable": true,
             "example": "Correios"
+          },
+          "orderTotalCents": {
+            "type": "number",
+            "description": "THE AMOUNT THAT WILL BE CHARGED if the customer picks this option — `itemsSubtotalCents + priceCents`. It is what a checkout button renders (\"Finalizar pedido — R$ 522,30\") before any order exists, and it is the same number POST /orders produces as `totalCents`. On a free option it equals the subtotal exactly: zero is a real price, not a missing one.",
+            "example": 52230
           }
         },
         "required": [
@@ -3977,7 +3994,8 @@
           "label",
           "priceCents",
           "estimatedDays",
-          "carrier"
+          "carrier",
+          "orderTotalCents"
         ]
       },
       "ShippingQuoteResponse": {
@@ -3988,10 +4006,16 @@
             "items": {
               "$ref": "#/components/schemas/ShippingOptionResponse"
             }
+          },
+          "itemsSubtotalCents": {
+            "type": "number",
+            "description": "The item subtotal of the cart this quote was measured against — the same number GET /cart reports, from the same definition. Present even when `options` is empty: what the cart is worth is a fact about the cart, not about whether anyone will carry it.",
+            "example": 49740
           }
         },
         "required": [
-          "options"
+          "options",
+          "itemsSubtotalCents"
         ]
       }
     }

@@ -108,17 +108,38 @@ como erro.
 GET  /products                     catálogo público
 POST /cart/items                   { productId, quantity }
 GET  /cart                         o carrinho é do TOKEN — não há id de carrinho em URL nenhuma
-POST /shipping/quote               { postalCode } -> { options: [...] }
+                                   -> { items, itemsSubtotalCents, itemCount }
+POST /shipping/quote               { postalCode }
+                                   -> { options: [...], itemsSubtotalCents }
 POST /orders                       { shippingAddress, shippingOptionCode, quotedShippingCents }
                                    -> 201 { id, status: 'CREATED', payment: {...} }
 ```
 
-Uma opção de frete é `{ code, label, priceCents, estimatedDays, carrier }`.
+Uma opção de frete é
+`{ code, label, priceCents, estimatedDays, carrier, orderTotalCents }`.
 `estimatedDays` e `carrier` podem ser `null`.
 
 No checkout você devolve `shippingOptionCode` e `quotedShippingCents` da
 opção escolhida. **O servidor re-cota** e recusa se não bater — o preço
 não vem do cliente.
+
+### Não some dinheiro no navegador
+
+Os três totais vêm prontos, e é de propósito
+([`specs/cart-totals.md`](specs/cart-totals.md)):
+
+- `itemsSubtotalCents` no carrinho — soma de `priceCents × quantity` sobre
+  o **preço vivo** do catálogo. Carrinho vazio é `0`, nunca `null`.
+- `itemCount` no carrinho — soma das quantidades, pro badge. Duas
+  camisetas e uma calça são `3`, não `2`.
+- `orderTotalCents` em **cada opção** de frete — `itemsSubtotalCents` mais
+  o `priceCents` daquela opção. É o valor exato que o `POST /orders` vai
+  cobrar: dá pra escrever "Finalizar pedido — R$ 522,30" no botão antes de
+  existir pedido nenhum, e o `totalCents` do pedido criado bate com ele.
+
+`GET /cart` **não** traz total do pedido, e isso não é esquecimento: sem
+CEP não há frete, e um "total" sem frete é justamente o número que um
+checkout não pode exibir.
 
 ### Pagar
 
