@@ -4,15 +4,26 @@ import type { Prisma } from '../generated/prisma/client';
 import { ProductStatus } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 
+/** What a stock write hands back: the variant, not the product. */
+export interface VariantStock {
+  id: string;
+  label: string;
+  position: number;
+  stockQuantity: number;
+}
+
 /**
- * The one place stock numbers change.
+ * The one place stock numbers change — and, since
+ * docs/specs/product-variants.md, the one place that knows stock belongs to a
+ * VARIANT rather than to a product. There is no product-level count any more,
+ * so there is no second code path that could decrement the wrong thing.
  *
  * Three operations on purpose, with different shapes: `setQuantity` is the
  * back-office correcting reality after counting shelves — an absolute write.
  * `decrement` is a sale — relative, and guarded. `restock` is a cancellation
  * returning units to the shelf — relative, unguarded. Orders calls the last
  * two; they are exported through CatalogModule precisely so `orders` never
- * touches the products table itself (docs/architecture/modules.md), and both
+ * touches the catalog's tables itself (docs/architecture/modules.md), and both
  * accept a transaction client so checkout/cancellation stay atomic across
  * the module boundary.
  */
@@ -21,39 +32,44 @@ export class StockService {
   constructor(private readonly prisma: PrismaService) {}
 
   async setQuantity(
-    productId: string,
+    variantId: string,
     quantity: number,
-  ): Promise<{ id: string; stockQuantity: number }> {
-    const existing = await this.prisma.product.findUnique({
-      where: { id: productId },
+  ): Promise<VariantStock> {
+    const existing = await this.prisma.productVariant.findUnique({
+      where: { id: variantId },
       select: { id: true },
     });
 
     if (!existing) {
-      throw new NotFoundException('Product not found');
+      throw new NotFoundException('Product variant not found');
     }
 
-    return this.prisma.product.update({
-      where: { id: productId },
+    return this.prisma.productVariant.update({
+      where: { id: variantId },
       data: { stockQuantity: quantity },
-      select: { id: true, stockQuantity: true },
+      select: { id: true, label: true, position: true, stockQuantity: true },
     });
   }
 
   /**
-   * Tries to take `quantity` units. Returns false when it cannot.
+   * Tries to take `quantity` units of one variant. Returns false when it
+   * cannot.
    *
    * Check and decrement are a single conditional UPDATE — `WHERE stock >= n`
-   * — so two checkouts racing for the last unit are serialized by Postgres'
-   * row lock, and exactly one wins. An application-side read-check-write
-   * would pass both reads and oversell; that is the bug this service exists
-   * to make unwritable. The status filter is the "archived products refuse
-   * new sales" invariant from the spec: an archived or missing product and
+   * — so two checkouts racing for the last M are serialized by Postgres' row
+   * lock, and exactly one wins. An application-side read-check-write would
+   * pass both reads and oversell; that is the bug this service exists to make
+   * unwritable.
+   *
+   * The status filter reaches through the relation to the owning product,
+   * because lifecycle belongs to the product and a variant has no status of
+   * its own. It is the catalog spec's "archived products refuse new sales"
+   * invariant, one level down. An archived product, a missing variant and
    * insufficient stock all report the same false, because the caller's next
    * move (refuse the sale) is the same.
    */
   async decrement(
-    productId: string,
+    variantId: string,
     quantity: number,
     tx?: Prisma.TransactionClient,
   ): Promise<boolean> {
@@ -65,11 +81,11 @@ export class StockService {
       );
     }
 
-    const { count } = await (tx ?? this.prisma).product.updateMany({
+    const { count } = await (tx ?? this.prisma).productVariant.updateMany({
       where: {
-        id: productId,
-        status: ProductStatus.ACTIVE,
+        id: variantId,
         stockQuantity: { gte: quantity },
+        product: { status: ProductStatus.ACTIVE },
       },
       data: { stockQuantity: { decrement: quantity } },
     });
@@ -78,17 +94,18 @@ export class StockService {
   }
 
   /**
-   * Puts `quantity` units back — a cancelled order returning to the shelf.
+   * Puts `quantity` units back on the variant — a cancelled order returning
+   * to the shelf.
    *
    * Deliberately unguarded where `decrement` is guarded: no status filter,
    * because the units physically exist even when the product has since been
    * archived (it just stays out of the storefront and keeps refusing new
-   * sales). A missing product row throws instead of returning false — the
-   * only caller is cancellation, whose order items Restrict product deletion,
+   * sales). A missing variant row throws instead of returning false — the
+   * only caller is cancellation, whose order items Restrict variant deletion,
    * so a miss here is a caller bug, not a condition to handle.
    */
   async restock(
-    productId: string,
+    variantId: string,
     quantity: number,
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
@@ -99,13 +116,13 @@ export class StockService {
       );
     }
 
-    const { count } = await (tx ?? this.prisma).product.updateMany({
-      where: { id: productId },
+    const { count } = await (tx ?? this.prisma).productVariant.updateMany({
+      where: { id: variantId },
       data: { stockQuantity: { increment: quantity } },
     });
 
     if (count !== 1) {
-      throw new Error(`restock hit a missing product: ${productId}`);
+      throw new Error(`restock hit a missing product variant: ${variantId}`);
     }
   }
 }

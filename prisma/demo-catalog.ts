@@ -19,6 +19,11 @@ import { PrismaClient } from '../src/generated/prisma/client';
  * SHIPPING_DEFAULT_WEIGHT_GRAMS (500 g) and anything heavier is under-quoted
  * with the store eating the difference (docs/specs/shipping.md) — a fine
  * fallback for a legacy row, a poor look on a catalogue created today.
+ *
+ * Every product also carries its VARIANTS, because stock lives on the variant
+ * and a product without one is unbuyable (docs/specs/product-variants.md). The
+ * clothing here gets real sizes; a mug gets the single `UNICO` variant, which
+ * is the same shape and not a special case.
  */
 
 const connectionString = process.env['DATABASE_URL'];
@@ -30,6 +35,18 @@ if (!connectionString) {
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString }),
 });
+
+/** What a product with no sizes of its own carries. Never absent. */
+const SINGLE = 'Único';
+
+/** P/M/G/GG/XGG in display order — position is the index, never the label. */
+function SIZES(stock: Record<string, number>) {
+  return ['P', 'M', 'G', 'GG', 'XGG'].map((label, position) => ({
+    label,
+    position,
+    stockQuantity: stock[label] ?? 0,
+  }));
+}
 
 const CATEGORIES = [
   {
@@ -62,7 +79,7 @@ const PRODUCTS = [
       'Caneca de cerâmica esmaltada, 325 ml. Apta para micro-ondas e lava-louças.',
     priceCents: 4990,
     weightGrams: 520,
-    stockQuantity: 40,
+    variants: [{ label: SINGLE, position: 0, stockQuantity: 40 }],
     categories: ['canecas'],
   },
   {
@@ -72,7 +89,7 @@ const PRODUCTS = [
       'Parede dupla a vácuo, tampa rosqueável. Mantém a bebida quente por cerca de 6 horas.',
     priceCents: 12900,
     weightGrams: 610,
-    stockQuantity: 25,
+    variants: [{ label: SINGLE, position: 0, stockQuantity: 25 }],
     categories: ['canecas', 'acessorios'],
   },
   {
@@ -81,7 +98,11 @@ const PRODUCTS = [
     description: 'Malha penteada 30.1, gola careca, modelagem unissex.',
     priceCents: 7900,
     weightGrams: 220,
-    stockQuantity: 60,
+    // A garment gets real sizes, and one of them is deliberately at zero:
+    // "this size exists and has none left" is a state the storefront must be
+    // able to render, and a demo catalogue that never shows it is a demo of
+    // half the feature.
+    variants: SIZES({ P: 12, M: 20, G: 18, GG: 8, XGG: 0 }),
     categories: ['camisetas'],
   },
   {
@@ -92,7 +113,7 @@ const PRODUCTS = [
     // The reason weights matter: at the 500 g default this would be quoted in
     // the cheapest bracket and ship in the most expensive one.
     weightGrams: 1180,
-    stockQuantity: 18,
+    variants: SIZES({ P: 4, M: 6, G: 5, GG: 3, XGG: 0 }),
     categories: ['camisetas'],
   },
   {
@@ -101,7 +122,7 @@ const PRODUCTS = [
     description: 'Base de borracha antiderrapante, bordas costuradas.',
     priceCents: 8900,
     weightGrams: 430,
-    stockQuantity: 35,
+    variants: [{ label: SINGLE, position: 0, stockQuantity: 35 }],
     categories: ['acessorios'],
   },
   {
@@ -110,7 +131,7 @@ const PRODUCTS = [
     description: 'Inox 304, parede dupla, boca larga.',
     priceCents: 15900,
     weightGrams: 940,
-    stockQuantity: 22,
+    variants: [{ label: SINGLE, position: 0, stockQuantity: 22 }],
     categories: ['acessorios'],
   },
 ] as const;
@@ -129,7 +150,7 @@ async function main() {
     categoryIdBySlug.set(category.slug, row.id);
   }
 
-  for (const { categories, ...product } of PRODUCTS) {
+  for (const { categories, variants, ...product } of PRODUCTS) {
     const links = categories.map((slug) => {
       const categoryId = categoryIdBySlug.get(slug);
 
@@ -145,10 +166,11 @@ async function main() {
     // ACTIVE rather than the DRAFT default: a product nobody can see is not a
     // demonstration of anything.
     //
-    // `status` and `stockQuantity` are set on create and never on update, so
-    // re-running this does not resurrect an archived product or refill stock
-    // that real orders consumed. Name, price, weight and categories ARE
-    // re-synced, because those are what this file is the source of.
+    // `status` and the VARIANTS (with their stock) are set on create and never
+    // on update, so re-running this does not resurrect an archived product,
+    // refill stock that real orders consumed, or duplicate a size. Name, price,
+    // weight and categories ARE re-synced, because those are what this file is
+    // the source of.
     await prisma.product.upsert({
       where: { slug: product.slug },
       create: {
@@ -156,6 +178,7 @@ async function main() {
         status: 'ACTIVE',
         imageUrls: [],
         categories: { create: links },
+        variants: { create: [...variants] },
       },
       update: {
         name: product.name,
@@ -167,15 +190,18 @@ async function main() {
     });
   }
 
-  const [categories, products] = await Promise.all([
+  const [categories, products, variants] = await Promise.all([
     prisma.category.count(),
     prisma.product.count(),
+    prisma.productVariant.count(),
   ]);
 
   console.log(
     'Demo catalogue ready:',
     products,
     'products,',
+    variants,
+    'variants,',
     categories,
     'categories.',
   );

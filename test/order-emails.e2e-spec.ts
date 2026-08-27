@@ -115,7 +115,7 @@ describe('Order emails (e2e)', () => {
     return (response.body as { accessToken: string }).accessToken;
   }
 
-  /** A cart with one product, ready to check out. */
+  /** A cart with one size of one product, ready to check out. */
   async function fillCart(token = customerToken): Promise<{ id: string }> {
     const product = await http()
       .post('/products')
@@ -124,16 +124,19 @@ describe('Order emails (e2e)', () => {
         name: 'Camiseta Azul',
         priceCents: 4990,
         status: ProductStatus.ACTIVE,
-        stockQuantity: 10,
+        variants: [{ label: 'Único', stockQuantity: 10 }],
       })
       .expect(201);
 
-    const { id } = product.body as { id: string };
+    const { id, variants } = product.body as {
+      id: string;
+      variants: { id: string }[];
+    };
 
     await http()
       .post('/cart/items')
       .set('Authorization', `Bearer ${token}`)
-      .send({ productId: id, quantity: 2 })
+      .send({ variantId: variants[0].id, quantity: 2 })
       .expect(201);
 
     return { id };

@@ -105,20 +105,68 @@ como erro.
 ## Fluxo de compra
 
 ```
-GET  /products                     catálogo público
-POST /cart/items                   { productId, quantity }
+GET  /products                     catálogo público; cada produto traz variants[]
+POST /cart/items                   { variantId, quantity }   <- VARIANTE, não produto
 GET  /cart                         o carrinho é do TOKEN — não há id de carrinho em URL nenhuma
-POST /shipping/quote               { postalCode } -> { options: [...] }
+                                   -> { items, itemsSubtotalCents, itemCount }
+POST /shipping/quote               { postalCode }
+                                   -> { options: [...], itemsSubtotalCents }
 POST /orders                       { shippingAddress, shippingOptionCode, quotedShippingCents }
                                    -> 201 { id, status: 'CREATED', payment: {...} }
 ```
 
-Uma opção de frete é `{ code, label, priceCents, estimatedDays, carrier }`.
+Uma opção de frete é
+`{ code, label, priceCents, estimatedDays, carrier, orderTotalCents }`.
 `estimatedDays` e `carrier` podem ser `null`.
 
 No checkout você devolve `shippingOptionCode` e `quotedShippingCents` da
 opção escolhida. **O servidor re-cota** e recusa se não bater — o preço
 não vem do cliente.
+
+### Não some dinheiro no navegador
+
+Os três totais vêm prontos, e é de propósito
+([`specs/cart-totals.md`](specs/cart-totals.md)):
+
+- `itemsSubtotalCents` no carrinho — soma de `priceCents × quantity` sobre
+  o **preço vivo** do catálogo. Carrinho vazio é `0`, nunca `null`.
+- `itemCount` no carrinho — soma das quantidades, pro badge. Duas
+  camisetas e uma calça são `3`, não `2`.
+- `orderTotalCents` em **cada opção** de frete — `itemsSubtotalCents` mais
+  o `priceCents` daquela opção. É o valor exato que o `POST /orders` vai
+  cobrar: dá pra escrever "Finalizar pedido — R$ 522,30" no botão antes de
+  existir pedido nenhum, e o `totalCents` do pedido criado bate com ele.
+
+`GET /cart` **não** traz total do pedido, e isso não é esquecimento: sem
+CEP não há frete, e um "total" sem frete é justamente o número que um
+checkout não pode exibir.
+
+### A unidade vendável é a variante, não o produto
+
+`ProductResponse` traz `variants: [{ id, label, position, stockQuantity }]`,
+**sempre com pelo menos uma** — um produto sem tamanho próprio carrega uma
+chamada `Único`. Detalhes que o front-end precisa saber
+([`specs/product-variants.md`](specs/product-variants.md)):
+
+- **Ordene por `position`, nunca pelo `label`.** P/M/G/GG/XGG em ordem
+  alfabética é G, GG, M, P, XGG.
+- **Variante com `stockQuantity: 0` vem na lista.** Risque o tamanho, não
+  esconda: "esgotado, volta" e "não fabricamos esse tamanho" são coisas
+  diferentes, e só a resposta sabe qual é qual.
+- `ProductResponse.stockQuantity` é a **soma** das variantes — serve pra
+  grade dizer "Esgotado" com um número só, e não serve pra decidir se um
+  tamanho específico pode ser comprado.
+- `POST /cart/items` recebe `{ variantId, quantity }`. As rotas de linha
+  (`PATCH`/`DELETE /cart/items/{variantId}`) também endereçam a variante.
+  Dois tamanhos da mesma peça são **duas linhas**.
+- Cada linha do carrinho traz `variant: { id, label, position,
+  stockQuantity }`. O estoque que importa ali é o **daquele tamanho** — por
+  isso `product` na linha não tem `stockQuantity`.
+- Os itens do pedido trazem `variantId` e `variantLabel`, congelados no
+  checkout junto com nome e preço.
+- O `409` de estoque de `POST /orders` devolve
+  `unavailableItems: [{ variantId, productId, productName, variantLabel }]` —
+  o suficiente pra escrever "Camiseta Preta (M) — esgotado".
 
 ### Pagar
 
@@ -186,9 +234,12 @@ endpoint.
 
 Não assuma nenhuma destas:
 
-- **Variantes de produto** (tamanho, cor, SKU). Um produto tem um preço e
-  um estoque. É a primeira coisa que uma loja real vai pedir, e é
-  mudança de schema no backend.
+- **Cor e SKU composto** (a matriz tamanho × cor). **Tamanho existe** —
+  ver a seção acima; cor não, e entra quando uma loja real vender.
+- **Preço por variante.** Uma peça custa o mesmo em P e em XGG.
+- **Renomear, reordenar ou remover uma variante.** Dá pra criar
+  (`POST /products/{id}/variants`) e corrigir estoque
+  (`PATCH /products/{id}/variants/{variantId}/stock`); o resto não.
 - **Cupons e descontos.**
 - **Carrinho de convidado** — precisa estar logado para ter carrinho.
 - **Busca e filtro ricos** no catálogo.

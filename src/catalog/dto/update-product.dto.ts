@@ -21,6 +21,13 @@ import { SLUG_PATTERN } from './create-product.dto';
  * Every field of CreateProductDto, each optional. Spelled out rather than
  * derived with PartialType because @nestjs/mapped-types is not a dependency
  * of this project, and one small DTO does not justify adding it.
+ *
+ * Two absences are deliberate. `stockQuantity` is gone because stock lives on
+ * a variant now — use PATCH /products/{id}/variants/{variantId}/stock. And
+ * `variants` is not here because replacing the set wholesale, the way
+ * categoryIds is replaced, would have to decide what happens to a size
+ * somebody already bought; adding one has its own route
+ * (docs/specs/product-variants.md).
  */
 export class UpdateProductDto {
   @ApiPropertyOptional({ maxLength: 200, example: 'Camiseta Azul' })
@@ -69,12 +76,6 @@ export class UpdateProductDto {
   @IsOptional()
   @IsEnum(ProductStatus)
   status?: ProductStatus;
-
-  @ApiPropertyOptional({ minimum: 0, example: 42 })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  stockQuantity?: number;
 
   /**
    * Unit weight in grams, for freight quoting. Optional: a product without one

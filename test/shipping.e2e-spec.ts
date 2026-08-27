@@ -46,6 +46,12 @@ interface ShippingOptionResponse {
   priceCents: number;
   estimatedDays: number | null;
   carrier: string | null;
+  orderTotalCents: number;
+}
+
+interface ShippingQuoteResponse {
+  options: ShippingOptionResponse[];
+  itemsSubtotalCents: number;
 }
 
 interface OrderResponse {
@@ -131,9 +137,15 @@ describe('Shipping (e2e)', () => {
     return (response.body as { accessToken: string }).accessToken;
   }
 
+  interface ProductResponse {
+    id: string;
+    variants: { id: string; label: string; stockQuantity: number }[];
+  }
+
+  /** A product with one size; stock lives on the variant now. */
   async function createProduct(
     overrides: Record<string, unknown> = {},
-  ): Promise<{ id: string }> {
+  ): Promise<ProductResponse> {
     const response = await http()
       .post('/products')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -141,27 +153,41 @@ describe('Shipping (e2e)', () => {
         name: 'Camiseta',
         priceCents: 5000,
         status: 'ACTIVE',
-        stockQuantity: 10,
+        variants: [{ label: 'Único', stockQuantity: 10 }],
         ...overrides,
       })
       .expect(201);
 
-    return response.body as { id: string };
+    return response.body as ProductResponse;
   }
 
   async function fillCart(
     quantity = 1,
     overrides: Record<string, unknown> = {},
-  ): Promise<{ id: string }> {
+  ): Promise<ProductResponse> {
     const product = await createProduct(overrides);
 
     await http()
       .post('/cart/items')
       .set('Authorization', `Bearer ${customerToken}`)
-      .send({ productId: product.id, quantity })
+      .send({ variantId: product.variants[0].id, quantity })
       .expect(201);
 
     return product;
+  }
+
+  async function quoteBody(
+    postalCode = ADDRESS.postalCode,
+    token = customerToken,
+    expected = 200,
+  ): Promise<ShippingQuoteResponse> {
+    const response = await http()
+      .post('/shipping/quote')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ postalCode })
+      .expect(expected);
+
+    return response.body as ShippingQuoteResponse;
   }
 
   async function quote(
@@ -169,13 +195,7 @@ describe('Shipping (e2e)', () => {
     token = customerToken,
     expected = 200,
   ): Promise<ShippingOptionResponse[]> {
-    const response = await http()
-      .post('/shipping/quote')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ postalCode })
-      .expect(expected);
-
-    return (response.body as { options: ShippingOptionResponse[] }).options;
+    return (await quoteBody(postalCode, token, expected)).options;
   }
 
   function checkout(body: Record<string, unknown>) {
@@ -212,6 +232,7 @@ describe('Shipping (e2e)', () => {
         priceCents: ONE_LIGHT_PARCEL_CENTS,
         estimatedDays: expect.any(Number) as number,
         carrier: null,
+        orderTotalCents: 5000 + ONE_LIGHT_PARCEL_CENTS,
       });
     });
 
@@ -241,7 +262,12 @@ describe('Shipping (e2e)', () => {
       // answer, and the caller turns it into a 409 at checkout.
       await fillCart(10, { weightGrams: 20_000 });
 
-      await expect(quote()).resolves.toEqual([]);
+      const body = await quoteBody();
+
+      expect(body.options).toEqual([]);
+      // The subtotal describes the cart, not the delivery — it survives the
+      // absence of any option to deliver it.
+      expect(body.itemsSubtotalCents).toBe(50_000);
     });
 
     it('uses a real product weight when it has one', async () => {
@@ -277,6 +303,39 @@ describe('Shipping (e2e)', () => {
   });
 
   describe('money', () => {
+    it('reports the cart subtotal and an order total per option', async () => {
+      await fillCart(2);
+
+      const body = await quoteBody();
+
+      expect(body.itemsSubtotalCents).toBe(10_000);
+      for (const option of body.options) {
+        // What a checkout button renders, before any order exists.
+        expect(option.orderTotalCents).toBe(
+          body.itemsSubtotalCents + option.priceCents,
+        );
+      }
+    });
+
+    it('quotes exactly the total the order is then created with', async () => {
+      await fillCart(2);
+
+      const body = await quoteBody();
+      const [option] = body.options;
+
+      const response = await checkout({
+        shippingOptionCode: option.code,
+        quotedShippingCents: option.priceCents,
+      }).expect(201);
+      const order = response.body as OrderResponse;
+
+      // The assertion that makes orderTotalCents worth having: the number the
+      // storefront put on the button IS the number the order was created for.
+      // Any drift between these two is a bug, and this is where it shows.
+      expect(order.totalCents).toBe(option.orderTotalCents);
+      expect(order.itemsSubtotalCents).toBe(body.itemsSubtotalCents);
+    });
+
     it('adds freight to the total and freezes the method', async () => {
       await fillCart();
 
@@ -342,8 +401,8 @@ describe('Shipping (e2e)', () => {
         ]) as unknown,
       });
       await expect(prisma.order.count()).resolves.toBe(0);
-      const stored = await prisma.product.findUniqueOrThrow({
-        where: { id: product.id },
+      const stored = await prisma.productVariant.findUniqueOrThrow({
+        where: { id: product.variants[0].id },
         select: { stockQuantity: true },
       });
       // Nothing was decremented: the refusal happens before the transaction.

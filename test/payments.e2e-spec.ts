@@ -127,9 +127,15 @@ describe('Payments (e2e)', () => {
     return (response.body as { accessToken: string }).accessToken;
   }
 
+  interface ProductResponse {
+    id: string;
+    variants: { id: string; label: string; stockQuantity: number }[];
+  }
+
+  /** A product with one size; stock lives on the variant now. */
   async function createProduct(
     overrides: Record<string, unknown> = {},
-  ): Promise<{ id: string }> {
+  ): Promise<ProductResponse> {
     const response = await http()
       .post('/products')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -137,24 +143,24 @@ describe('Payments (e2e)', () => {
         name: 'Camiseta Azul',
         priceCents: 4990,
         status: ProductStatus.ACTIVE,
-        stockQuantity: 10,
+        variants: [{ label: 'Único', stockQuantity: 10 }],
         ...overrides,
       })
       .expect(201);
 
-    return response.body as { id: string };
+    return response.body as ProductResponse;
   }
 
-  /** A cart with one product, ready to check out. */
+  /** A cart with one size of one product, ready to check out. */
   async function fillCart(
     token = customerToken,
     quantity = 2,
-  ): Promise<{ id: string }> {
+  ): Promise<ProductResponse> {
     const product = await createProduct();
     await http()
       .post('/cart/items')
       .set('Authorization', `Bearer ${token}`)
-      .send({ productId: product.id, quantity })
+      .send({ variantId: product.variants[0].id, quantity })
       .expect(201);
 
     return product;
@@ -209,13 +215,14 @@ describe('Payments (e2e)', () => {
     return response.body as OrderResponse;
   }
 
-  async function stockOf(productId: string): Promise<number> {
-    const product = await prisma.product.findUniqueOrThrow({
-      where: { id: productId },
+  /** Stock of one size, read straight from the table that now holds it. */
+  async function stockOf(variantId: string): Promise<number> {
+    const variant = await prisma.productVariant.findUniqueOrThrow({
+      where: { id: variantId },
       select: { stockQuantity: true },
     });
 
-    return product.stockQuantity;
+    return variant.stockQuantity;
   }
 
   function nextEventId(): string {
@@ -354,7 +361,7 @@ describe('Payments (e2e)', () => {
       expect(order.status).toBe(OrderStatus.CREATED);
       expect(order.payment).toBeNull();
       expect(order.paymentRef).toBeNull();
-      expect(await stockOf(product.id)).toBe(8);
+      expect(await stockOf(product.variants[0].id)).toBe(8);
 
       const recovered = await http()
         .post(`/orders/${order.id}/pay`)
@@ -600,7 +607,7 @@ describe('Payments (e2e)', () => {
       // a decision left to a human (docs/specs/payments.md).
       const after = await orderOf(order.id);
       expect(after.status).toBe(OrderStatus.CREATED);
-      expect(await stockOf(product.id)).toBe(8);
+      expect(await stockOf(product.variants[0].id)).toBe(8);
       expect(await prisma.paymentEvent.count()).toBe(1);
     });
 
@@ -632,17 +639,17 @@ describe('Payments (e2e)', () => {
   describe('refund', () => {
     async function paidOrder(): Promise<{
       order: OrderResponse;
-      productId: string;
+      variantId: string;
     }> {
       const product = await fillCart();
       const order = await payOrder(await checkout());
 
-      return { order, productId: product.id };
+      return { order, variantId: product.variants[0].id };
     }
 
     it('gives the money back, marks REFUNDED and restocks', async () => {
-      const { order, productId } = await paidOrder();
-      expect(await stockOf(productId)).toBe(8);
+      const { order, variantId } = await paidOrder();
+      expect(await stockOf(variantId)).toBe(8);
 
       const response = await http()
         .post(`/orders/${order.id}/refund`)
@@ -655,7 +662,7 @@ describe('Payments (e2e)', () => {
       expect(refunded.refundRef).toMatch(/^re_test_/);
       // Against the intent, which is the only reference a refund can use.
       expect(stripe.refundsIssued).toEqual([order.paymentIntentRef]);
-      expect(await stockOf(productId)).toBe(10);
+      expect(await stockOf(variantId)).toBe(10);
     });
 
     it('is admin-only: an operator and the buyer both get 403', async () => {
@@ -705,7 +712,7 @@ describe('Payments (e2e)', () => {
     });
 
     it('refuses to refund twice and restocks only once', async () => {
-      const { order, productId } = await paidOrder();
+      const { order, variantId } = await paidOrder();
 
       await http()
         .post(`/orders/${order.id}/refund`)
@@ -716,12 +723,12 @@ describe('Payments (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(409);
 
-      expect(await stockOf(productId)).toBe(10);
+      expect(await stockOf(variantId)).toBe(10);
       expect(stripe.refundsIssued).toHaveLength(1);
     });
 
     it('follows a refund issued from the provider dashboard', async () => {
-      const { order, productId } = await paidOrder();
+      const { order, variantId } = await paidOrder();
 
       // A real charge.refunded (frozen fixture) names the intent and nothing of
       // ours — the order is found through the intent it stored when it was paid.
@@ -736,13 +743,13 @@ describe('Payments (e2e)', () => {
       // id, and the status change is the point. The convenience ref is only
       // ever set when our own /refund route issues the reversal.
       expect(refunded.refundRef).toBeNull();
-      expect(await stockOf(productId)).toBe(10);
+      expect(await stockOf(variantId)).toBe(10);
       // Nothing was sent back to the provider: it started this.
       expect(stripe.refundsIssued).toEqual([]);
     });
 
     it('ignores a PARTIAL dashboard refund instead of reversing the order', async () => {
-      const { order, productId } = await paidOrder();
+      const { order, variantId } = await paidOrder();
 
       // Support issues a small goodwill credit on a much larger order. Stripe
       // fires charge.refunded for this too, with `refunded: false`. Treating it
@@ -762,7 +769,7 @@ describe('Payments (e2e)', () => {
       expect(after.status).toBe(OrderStatus.PAID);
       expect(after.refundedAt).toBeNull();
       // Stock stays consumed: nothing came back to the shelf.
-      expect(await stockOf(productId)).toBe(8);
+      expect(await stockOf(variantId)).toBe(8);
       // Recorded, so the trail still shows it arrived.
       expect(await prisma.paymentEvent.count()).toBe(2);
     });
@@ -783,7 +790,7 @@ describe('Payments (e2e)', () => {
     });
 
     it('settles a refund that overtook its payment once the payment registers', async () => {
-      const { order, productId } = await paidOrder();
+      const { order, variantId } = await paidOrder();
       const intent = order.paymentIntentRef ?? '';
 
       // Same event id both times: the first attempt is refused and left
@@ -799,7 +806,7 @@ describe('Payments (e2e)', () => {
 
       const refunded = await orderOf(order.id);
       expect(refunded.status).toBe(OrderStatus.REFUNDED);
-      expect(await stockOf(productId)).toBe(10);
+      expect(await stockOf(variantId)).toBe(10);
     });
   });
 

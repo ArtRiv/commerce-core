@@ -7,40 +7,79 @@ import {
 import { ProductsService } from '../catalog/products.service';
 import { ProductStatus } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
+import { itemCount, itemsSubtotalCents } from './money';
 
-/** What findByIds exposes — the sellable slice of a product. */
+/**
+ * The sellable slice of a product, as findSellableByVariantIds exposes it.
+ *
+ * No stock here: in a cart line the only number that means anything is the
+ * stock of THAT size, which lives on the variant beside it. Handing back the
+ * product's sum would invite showing "10 left" on a line whose M is gone
+ * (docs/specs/product-variants.md).
+ */
 export interface LiveProduct {
   id: string;
   name: string;
   slug: string;
   priceCents: number;
   status: ProductStatus;
-  stockQuantity: number;
   /** Null until someone weighs it; shipping falls back to its own default. */
   weightGrams: number | null;
 }
 
+/** The size on this line, live from the catalogue. */
+export interface LiveVariant {
+  id: string;
+  label: string;
+  position: number;
+  stockQuantity: number;
+}
+
 export interface CartView {
   items: {
-    productId: string;
+    /** The line's identity — PATCH and DELETE address it. */
+    variantId: string;
     quantity: number;
     /**
      * Live catalog data, deliberately not a snapshot: the cart holds no
-     * money (docs/specs/orders.md). Status and stock ride along so a front
-     * end can warn "left the catalog" / "only 2 left" — deriving warnings is
-     * the client's job, reporting current truth is ours.
+     * money (docs/specs/orders.md). Status rides along so a front end can
+     * warn "left the catalog" — deriving warnings is the client's job,
+     * reporting current truth is ours.
      */
     product: LiveProduct;
+    /** Same live read, one level down: label, order and this size's stock. */
+    variant: LiveVariant;
   }[];
+
+  /**
+   * Sum of product.priceCents × quantity over the lines, measured server-side
+   * against LIVE catalogue prices. Money arithmetic belongs here, not in a
+   * browser (docs/specs/cart-totals.md), and an empty cart is 0 — never null,
+   * never absent.
+   */
+  itemsSubtotalCents: number;
+
+  /** Sum of quantities — the cart badge. Pieces, not lines. */
+  itemCount: number;
 }
+
+const EMPTY_CART: CartView = {
+  items: [],
+  itemsSubtotalCents: 0,
+  itemCount: 0,
+};
 
 const MAX_ITEM_QUANTITY = 999;
 
 /**
  * The mutable half of the purchase flow. One cart per user, created lazily on
- * the first add; product data is read through ProductsService.findByIds — the
- * exported catalog contract — never by joining catalog tables directly
- * (docs/architecture/modules.md).
+ * the first add; catalogue data is read through
+ * ProductsService.findSellableByVariantIds — the exported contract — never by
+ * joining catalog tables directly (docs/architecture/modules.md).
+ *
+ * Lines address a VARIANT, not a product: two sizes of one shirt are two
+ * lines, and "the M" is the thing that can actually be bought
+ * (docs/specs/product-variants.md).
  */
 @Injectable()
 export class CartService {
@@ -56,38 +95,62 @@ export class CartService {
     });
 
     if (!cart || cart.items.length === 0) {
-      return { items: [] };
+      return { ...EMPTY_CART };
     }
 
-    const products = await this.products.findByIds(
-      cart.items.map((item) => item.productId),
+    const variants = await this.products.findSellableByVariantIds(
+      cart.items.map((item) => item.variantId),
     );
-    const byId = new Map(products.map((product) => [product.id, product]));
+    const byId = new Map(variants.map((variant) => [variant.id, variant]));
+
+    const items = cart.items.map((item) => {
+      // The FK guarantees the row exists; a miss would be schema drift worth
+      // crashing on, hence the lookup-then-assert.
+      const variant = byId.get(item.variantId) as (typeof variants)[number];
+
+      return {
+        variantId: item.variantId,
+        quantity: item.quantity,
+        product: variant.product,
+        variant: {
+          id: variant.id,
+          label: variant.label,
+          position: variant.position,
+          stockQuantity: variant.stockQuantity,
+        },
+      };
+    });
 
     return {
-      items: cart.items.map((item) => ({
-        productId: item.productId,
-        quantity: item.quantity,
-        // The FK guarantees the row exists; a miss would be schema drift
-        // worth crashing on, hence the non-null assertion via lookup+throw.
-        product: byId.get(item.productId) as LiveProduct,
-      })),
+      items,
+      // The same function checkout uses to freeze itemsSubtotalCents onto the
+      // order, so what is displayed and what is charged cannot drift apart.
+      itemsSubtotalCents: itemsSubtotalCents(
+        items.map((item) => ({
+          unitPriceCents: item.product.priceCents,
+          quantity: item.quantity,
+        })),
+      ),
+      itemCount: itemCount(items),
     };
   }
 
   async addItem(
     userId: string,
-    productId: string,
+    variantId: string,
     quantity: number,
   ): Promise<CartView> {
     this.assertValidQuantity(quantity);
 
-    const product = (await this.products.findByIds([productId])).at(0);
+    const variant = (
+      await this.products.findSellableByVariantIds([variantId])
+    ).at(0);
 
     // Hidden and missing are the same 404 on purpose, mirroring the public
-    // catalog: a DRAFT product must not be discoverable through the cart.
-    if (!product || product.status !== ProductStatus.ACTIVE) {
-      throw new NotFoundException('Product not found');
+    // catalog: a DRAFT product must not be discoverable through the cart, and
+    // neither must one of its sizes.
+    if (!variant || variant.product.status !== ProductStatus.ACTIVE) {
+      throw new NotFoundException('Product variant not found');
     }
 
     // Lazy cart creation and the double-create race both land on the same
@@ -99,11 +162,12 @@ export class CartService {
       select: { id: true },
     });
 
-    // Repeat adds sum quantities instead of duplicating the line; the
-    // cartId+productId unique makes this one statement.
+    // Repeat adds of the SAME SIZE sum quantities instead of duplicating the
+    // line; the cartId+variantId unique makes this one statement. A different
+    // size of the same product is a different line, which is the point.
     await this.prisma.cartItem.upsert({
-      where: { cartId_productId: { cartId: cart.id, productId } },
-      create: { cartId: cart.id, productId, quantity },
+      where: { cartId_variantId: { cartId: cart.id, variantId } },
+      create: { cartId: cart.id, variantId, quantity },
       update: { quantity: { increment: quantity } },
     });
 
@@ -112,7 +176,7 @@ export class CartService {
 
   async setQuantity(
     userId: string,
-    productId: string,
+    variantId: string,
     quantity: number,
   ): Promise<CartView> {
     this.assertValidQuantity(quantity);
@@ -120,7 +184,7 @@ export class CartService {
     const cart = await this.findCartOrThrow(userId);
 
     const { count } = await this.prisma.cartItem.updateMany({
-      where: { cartId: cart.id, productId },
+      where: { cartId: cart.id, variantId },
       data: { quantity },
     });
 
@@ -131,11 +195,11 @@ export class CartService {
     return this.getCart(userId);
   }
 
-  async removeItem(userId: string, productId: string): Promise<CartView> {
+  async removeItem(userId: string, variantId: string): Promise<CartView> {
     const cart = await this.findCartOrThrow(userId);
 
     const { count } = await this.prisma.cartItem.deleteMany({
-      where: { cartId: cart.id, productId },
+      where: { cartId: cart.id, variantId },
     });
 
     if (count === 0) {
@@ -157,7 +221,7 @@ export class CartService {
       await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
     }
 
-    return { items: [] };
+    return { ...EMPTY_CART };
   }
 
   private async findCartOrThrow(userId: string): Promise<{ id: string }> {

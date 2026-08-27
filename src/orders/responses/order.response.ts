@@ -7,9 +7,10 @@ import {
 } from '../../payments/payment-provider';
 
 /**
- * A line of the financial record. `productName` and `unitPriceCents` are
- * frozen at checkout: a later price change in the catalog never reaches an
- * order that already exists, and no endpoint edits these.
+ * A line of the financial record. `productName`, `variantLabel` and
+ * `unitPriceCents` are frozen at checkout: a later price change or a size
+ * renamed in the catalog never reaches an order that already exists, and no
+ * endpoint edits these.
  */
 export class OrderItemResponse {
   @ApiProperty({
@@ -24,6 +25,19 @@ export class OrderItemResponse {
     example: 'Camiseta Azul',
   })
   productName: string;
+
+  @ApiProperty({
+    format: 'uuid',
+    description: 'The size that was bought. Traceability, like productId.',
+  })
+  variantId: string;
+
+  @ApiProperty({
+    description:
+      "The size's label at the moment of purchase — a snapshot, exactly like the name and the price. Renaming a size later never rewrites an order that already exists.",
+    example: 'M',
+  })
+  variantLabel: string;
 
   @ApiProperty({
     description: 'The price at the moment of purchase, in cents.',

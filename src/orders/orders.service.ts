@@ -21,11 +21,9 @@ import {
   type PaymentSession,
 } from '../payments/payment-provider';
 import { PrismaService } from '../prisma/prisma.service';
+import { itemsSubtotalCents } from './money';
 import { OrderNotificationsService } from './order-notifications.service';
-import {
-  itemsSubtotalCents,
-  ShippingQuoteService,
-} from './shipping-quote.service';
+import { ShippingQuoteService } from './shipping-quote.service';
 
 export interface ShippingAddress {
   line1: string;
@@ -77,6 +75,41 @@ interface PayableOrder {
   paymentRef: string | null;
 }
 
+/**
+ * A line checkout had to refuse, described well enough to render.
+ *
+ * The name alone is not enough once sizes exist: "Camiseta Preta is out of
+ * stock" is wrong when only the M is, and a storefront cannot strike anything
+ * through without knowing which piece lost.
+ */
+export interface UnavailableItem {
+  variantId: string;
+  productId: string;
+  productName: string;
+  variantLabel: string;
+}
+
+/** What the catalogue contract hands back for one cart line. */
+interface SellableVariant {
+  id: string;
+  label: string;
+  product: { id: string; name: string };
+}
+
+function describeLine(
+  variant: SellableVariant | undefined,
+  variantId: string,
+): UnavailableItem {
+  // The FK guarantees the row exists; the fallbacks exist so a schema drift
+  // still produces a readable error instead of a crash inside an error path.
+  return {
+    variantId,
+    productId: variant?.product.id ?? '',
+    productName: variant?.product.name ?? '',
+    variantLabel: variant?.label ?? '',
+  };
+}
+
 const MAX_PER_PAGE = 100;
 
 /** Line items travel with every order read — they ARE the financial record. */
@@ -85,6 +118,10 @@ const ITEMS_INCLUDE = {
     select: {
       productId: true,
       productName: true,
+      variantId: true,
+      // A snapshot beside the name and the price: a size renamed later must
+      // not rewrite what somebody bought (docs/specs/product-variants.md).
+      variantLabel: true,
       unitPriceCents: true,
       quantity: true,
     },
@@ -145,31 +182,36 @@ export class OrdersService {
       throw new ConflictException('Cart is empty');
     }
 
-    const products = await this.products.findByIds(
-      cart.items.map((item) => item.productId),
+    const variants = await this.products.findSellableByVariantIds(
+      cart.items.map((item) => item.variantId),
     );
-    const byId = new Map(products.map((product) => [product.id, product]));
+    const byId = new Map(variants.map((variant) => [variant.id, variant]));
 
     // Pre-check for a precise error; the decrement below re-checks status
     // atomically, so this is UX, not the integrity mechanism.
     const notSellable = cart.items
-      .map((item) => item.productId)
-      .filter((id) => byId.get(id)?.status !== ProductStatus.ACTIVE);
+      .filter(
+        (item) =>
+          byId.get(item.variantId)?.product.status !== ProductStatus.ACTIVE,
+      )
+      .map((item) => describeLine(byId.get(item.variantId), item.variantId));
     if (notSellable.length > 0) {
       throw new ConflictException({
         message: 'Some cart items are no longer for sale',
-        productIds: notSellable,
+        unavailableItems: notSellable,
       });
     }
 
     const lines = cart.items.map((item) => {
-      const product = byId.get(item.productId);
+      const variant = byId.get(item.variantId);
 
       return {
-        productId: item.productId,
+        // Freight is priced per PRODUCT — weight is a property of the article,
+        // not of its size — so the quote still speaks in product ids.
+        productId: variant?.product.id ?? '',
         quantity: item.quantity,
-        unitPriceCents: product?.priceCents ?? 0,
-        weightGrams: product?.weightGrams ?? null,
+        unitPriceCents: variant?.product.priceCents ?? 0,
+        weightGrams: variant?.product.weightGrams ?? null,
       };
     });
 
@@ -200,23 +242,25 @@ export class OrdersService {
         throw new ConflictException('Cart is empty');
       }
 
-      const failed: string[] = [];
+      const failed: UnavailableItem[] = [];
       for (const item of cart.items) {
         const ok = await this.stock.decrement(
-          item.productId,
+          item.variantId,
           item.quantity,
           tx,
         );
         if (!ok) {
-          failed.push(item.productId);
+          failed.push(describeLine(byId.get(item.variantId), item.variantId));
         }
       }
       // Throwing rolls the whole transaction back — cart intact, stock
-      // untouched, no order. All losing items are named, not just the first.
+      // untouched, no order. All losing items are named, not just the first —
+      // and named as PIECES, because "Camiseta Preta" without the size is not
+      // something a storefront can put on the screen.
       if (failed.length > 0) {
         throw new ConflictException({
           message: 'Insufficient stock or product no longer for sale',
-          productIds: failed,
+          unavailableItems: failed,
         });
       }
 
@@ -240,13 +284,16 @@ export class OrdersService {
           shippingEtaDays: shipping.estimatedDays,
           items: {
             create: cart.items.map((item) => {
-              const product = byId.get(item.productId);
+              const variant = byId.get(item.variantId);
               return {
-                productId: item.productId,
-                // The snapshot: what was bought at the price paid, frozen
-                // beyond the reach of future catalog edits.
-                productName: product?.name ?? '',
-                unitPriceCents: product?.priceCents ?? 0,
+                productId: variant?.product.id ?? '',
+                variantId: item.variantId,
+                // The snapshot: what was bought, in the size it was bought,
+                // at the price paid — frozen beyond the reach of future
+                // catalog edits, renames included.
+                productName: variant?.product.name ?? '',
+                variantLabel: variant?.label ?? '',
+                unitPriceCents: variant?.product.priceCents ?? 0,
                 quantity: item.quantity,
               };
             }),
@@ -406,7 +453,7 @@ export class OrdersService {
         id,
         ...(canReadAll || canCancelAny ? {} : { userId: user.id }),
       },
-      include: { items: { select: { productId: true, quantity: true } } },
+      include: { items: { select: { variantId: true, quantity: true } } },
     });
 
     if (!order) {
@@ -435,7 +482,7 @@ export class OrdersService {
       }
 
       for (const item of order.items) {
-        await this.stock.restock(item.productId, item.quantity, tx);
+        await this.stock.restock(item.variantId, item.quantity, tx);
       }
     });
 
@@ -698,11 +745,11 @@ export class OrdersService {
       // uses.
       const items = await tx.orderItem.findMany({
         where: { orderId: id },
-        select: { productId: true, quantity: true },
+        select: { variantId: true, quantity: true },
       });
 
       for (const item of items) {
-        await this.stock.restock(item.productId, item.quantity, tx);
+        await this.stock.restock(item.variantId, item.quantity, tx);
       }
 
       return true;

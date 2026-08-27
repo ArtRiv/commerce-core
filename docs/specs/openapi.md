@@ -222,7 +222,17 @@ mesmo status, mesmo corpo. **Nenhuma mudança de runtime** — esta spec
 descreve o que já existe, e o único corpo que muda é o do `GET /`, que
 hoje é uma string de scaffold.
 
-### Inventário auditado (38 rotas)
+### Inventário auditado (38 rotas, na data desta spec)
+
+> **Hoje são 39.** `product-variants` trocou
+> `PATCH /products/{id}/stock` por
+> `PATCH /products/{id}/variants/{variantId}/stock` (saldo zero) e
+> acrescentou `POST /products/{id}/variants` (saldo um), levando
+> `ProductsController` a 7. A tabela abaixo fica como estava: ela é o
+> retrato da auditoria que esta spec fez, e o número que precisa estar
+> certo em toda hora é o `EXPECTED_ROUTE_COUNT` de
+> `src/openapi/document.spec.ts`, que falha o CI quando diverge.
+> Ver [product-variants.md](product-variants.md).
 
 Contagem por controller, conferida contra as tabelas de rota das specs:
 

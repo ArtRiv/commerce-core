@@ -14,6 +14,13 @@ interface CategoryRef {
   slug: string;
 }
 
+interface VariantRow {
+  id: string;
+  label: string;
+  position: number;
+  stockQuantity: number;
+}
+
 interface ProductRow {
   id: string;
   name: string;
@@ -22,8 +29,8 @@ interface ProductRow {
   priceCents: number;
   imageUrls: string[];
   status: ProductStatus;
-  stockQuantity: number;
   categories: { category: CategoryRef }[];
+  variants: VariantRow[];
 }
 
 function productRow(overrides: Partial<ProductRow> = {}): ProductRow {
@@ -35,8 +42,10 @@ function productRow(overrides: Partial<ProductRow> = {}): ProductRow {
     priceCents: 4990,
     imageUrls: [],
     status: ProductStatus.ACTIVE,
-    stockQuantity: 10,
     categories: [],
+    variants: [
+      { id: 'variant-1', label: 'Único', position: 0, stockQuantity: 10 },
+    ],
     ...overrides,
   };
 }
@@ -54,6 +63,13 @@ function createPrismaMock() {
       update: jest
         .fn<Promise<ProductRow>, [unknown]>()
         .mockResolvedValue(productRow()),
+    },
+    productVariant: {
+      findFirst: jest
+        .fn<Promise<{ id: string } | null>, [unknown]>()
+        .mockResolvedValue(null),
+      findMany: jest.fn<Promise<unknown[]>, [unknown]>().mockResolvedValue([]),
+      create: jest.fn<Promise<unknown>, [unknown]>().mockResolvedValue({}),
     },
     category: {
       count: jest.fn<Promise<number>, [unknown]>().mockResolvedValue(0),
@@ -496,51 +512,197 @@ describe('ProductsService', () => {
     });
   });
 
-  describe('findByIds', () => {
-    it('returns the sellable snapshot fields for the requested ids, any status', async () => {
+  describe('findSellableByVariantIds', () => {
+    it('returns each variant with its product, any status', async () => {
       const prisma = createPrismaMock();
       const rows = [
         {
-          id: 'product-1',
-          name: 'Camiseta Azul',
-          slug: 'camiseta-azul',
-          priceCents: 4990,
-          status: ProductStatus.ACTIVE,
-          stockQuantity: 10,
+          id: 'variant-1',
+          label: 'M',
+          position: 1,
+          stockQuantity: 4,
+          product: {
+            id: 'product-1',
+            name: 'Camiseta Azul',
+            slug: 'camiseta-azul',
+            priceCents: 4990,
+            status: ProductStatus.ACTIVE,
+            weightGrams: 220,
+          },
         },
         {
-          id: 'product-2',
-          name: 'Caneca',
-          slug: 'caneca',
-          priceCents: 2500,
-          status: ProductStatus.ARCHIVED,
+          id: 'variant-2',
+          label: 'Único',
+          position: 0,
           stockQuantity: 0,
+          product: {
+            id: 'product-2',
+            name: 'Caneca',
+            slug: 'caneca',
+            priceCents: 2500,
+            status: ProductStatus.ARCHIVED,
+            weightGrams: null,
+          },
         },
       ];
-      prisma.product.findMany.mockResolvedValue(rows);
+      prisma.productVariant.findMany.mockResolvedValue(rows);
 
-      const result = await serviceWith(prisma).findByIds([
-        'product-1',
-        'product-2',
+      const result = await serviceWith(prisma).findSellableByVariantIds([
+        'variant-1',
+        'variant-2',
       ]);
 
       expect(result).toEqual(rows);
-      const [args] = prisma.product.findMany.mock.calls[0] as [
+      const [args] = prisma.productVariant.findMany.mock.calls[0] as [
         { where: { id: { in: string[] } } },
       ];
       // No status filter: this read exists for cart views and checkout, and
-      // both need to SEE a product that went non-ACTIVE to say so — hiding it
+      // both need to SEE a product that went non-ACTIVE to say so - hiding it
       // here would turn "this item left the catalog" into a silent absence.
-      expect(args.where).toEqual({ id: { in: ['product-1', 'product-2'] } });
+      expect(args.where).toEqual({ id: { in: ['variant-1', 'variant-2'] } });
     });
 
     it('returns an empty list for an empty id list without querying', async () => {
       const prisma = createPrismaMock();
 
-      const result = await serviceWith(prisma).findByIds([]);
+      const result = await serviceWith(prisma).findSellableByVariantIds([]);
 
       expect(result).toEqual([]);
-      expect(prisma.product.findMany).not.toHaveBeenCalled();
+      expect(prisma.productVariant.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('variants', () => {
+    it('creates one Único variant when none is sent', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).create(baseInput);
+
+      const [args] = prisma.product.create.mock.calls[0] as [
+        {
+          data: {
+            variants: {
+              create: {
+                label: string;
+                position: number;
+                stockQuantity: number;
+              }[];
+            };
+          };
+        },
+      ];
+      // Never zero variants: a product with none is unbuyable, and "product
+      // without variants" is the second code path this module must not have.
+      expect(args.data.variants.create).toEqual([
+        { label: 'Único', position: 0, stockQuantity: 0 },
+      ]);
+    });
+
+    it('numbers positions by the order sent, so P/M/G/GG/XGG stays in order', async () => {
+      const prisma = createPrismaMock();
+
+      await serviceWith(prisma).create({
+        ...baseInput,
+        variants: [
+          { label: 'P' },
+          { label: 'M', stockQuantity: 4 },
+          { label: 'G' },
+          { label: 'GG' },
+          { label: 'XGG' },
+        ],
+      });
+
+      const [args] = prisma.product.create.mock.calls[0] as [
+        {
+          data: {
+            variants: {
+              create: {
+                label: string;
+                position: number;
+                stockQuantity: number;
+              }[];
+            };
+          };
+        },
+      ];
+      // Alphabetically this list is G, GG, M, P, XGG - which is why position
+      // exists and why it is never derived from the label.
+      expect(args.data.variants.create).toEqual([
+        { label: 'P', position: 0, stockQuantity: 0 },
+        { label: 'M', position: 1, stockQuantity: 4 },
+        { label: 'G', position: 2, stockQuantity: 0 },
+        { label: 'GG', position: 3, stockQuantity: 0 },
+        { label: 'XGG', position: 4, stockQuantity: 0 },
+      ]);
+    });
+
+    it('400s two variants sharing a label', async () => {
+      const prisma = createPrismaMock();
+
+      await expect(
+        serviceWith(prisma).create({
+          ...baseInput,
+          variants: [{ label: 'M' }, { label: 'M' }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.product.create).not.toHaveBeenCalled();
+    });
+
+    it('sums the variants into the product stockQuantity on read', async () => {
+      const prisma = createPrismaMock();
+      prisma.product.findFirst.mockResolvedValue(
+        productRow({
+          variants: [
+            { id: 'v1', label: 'P', position: 0, stockQuantity: 3 },
+            { id: 'v2', label: 'M', position: 1, stockQuantity: 5 },
+            // Sold out, and still here: the storefront strikes it through.
+            { id: 'v3', label: 'G', position: 2, stockQuantity: 0 },
+          ],
+        }),
+      );
+
+      const result = await serviceWith(prisma).findOne('camiseta-azul', {
+        includeNonActive: false,
+      });
+
+      expect(result.stockQuantity).toBe(8);
+      expect(result.variants).toHaveLength(3);
+    });
+
+    it('appends a new variant to the end and 409s a duplicate label', async () => {
+      const prisma = createPrismaMock();
+      prisma.product.findUnique.mockResolvedValue(
+        productRow({
+          variants: [
+            { id: 'v1', label: 'P', position: 0, stockQuantity: 1 },
+            { id: 'v2', label: 'M', position: 1, stockQuantity: 1 },
+          ],
+        }),
+      );
+
+      await serviceWith(prisma).addVariant('product-1', { label: 'G' });
+
+      const [args] = prisma.productVariant.create.mock.calls[0] as [
+        {
+          data: {
+            productId: string;
+            label: string;
+            position: number;
+            stockQuantity: number;
+          };
+        },
+      ];
+      expect(args.data).toEqual({
+        productId: 'product-1',
+        label: 'G',
+        position: 2,
+        stockQuantity: 0,
+      });
+
+      prisma.productVariant.findFirst.mockResolvedValue({ id: 'v2' });
+      await expect(
+        serviceWith(prisma).addVariant('product-1', { label: 'M' }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 });

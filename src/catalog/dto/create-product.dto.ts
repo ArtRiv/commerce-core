@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -12,9 +13,11 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
 import { ProductStatus } from '../../generated/prisma/enums';
+import { CreateVariantDto } from './create-variant.dto';
 
 /** Lowercase alphanumerics separated by single hyphens — what slugify emits. */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -78,11 +81,27 @@ export class CreateProductDto {
   @IsEnum(ProductStatus)
   status?: ProductStatus;
 
-  @ApiPropertyOptional({ minimum: 0, default: 0, example: 42 })
+  /**
+   * The sellable sizes. Omit and the product is born with exactly ONE variant
+   * labelled `Único` at zero stock — never with none, because a product with
+   * no variant is unbuyable, and "product without variants" is the second code
+   * path this module exists to not have.
+   *
+   * There is no `stockQuantity` on a product any more: stock is a property of
+   * a size (docs/specs/product-variants.md).
+   */
+  @ApiPropertyOptional({
+    type: [CreateVariantDto],
+    maxItems: 50,
+    description:
+      'The sellable sizes, in display order. Omit and the product gets one variant labelled `Único` at zero stock — a product is never created without at least one. Labels must be unique within the product.',
+  })
   @IsOptional()
-  @IsInt()
-  @Min(0)
-  stockQuantity?: number;
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => CreateVariantDto)
+  variants?: CreateVariantDto[];
 
   /**
    * Unit weight in grams, for freight quoting. Optional: a product without one

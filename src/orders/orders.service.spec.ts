@@ -69,6 +69,8 @@ interface OrderRow {
   items: {
     productId: string;
     productName: string;
+    variantId: string;
+    variantLabel: string;
     unitPriceCents: number;
     quantity: number;
   }[];
@@ -114,7 +116,7 @@ function createPrismaMock() {
       findUnique: jest.fn<
         Promise<{
           id: string;
-          items: { productId: string; quantity: number }[];
+          items: { variantId: string; quantity: number }[];
         } | null>,
         [unknown]
       >(),
@@ -143,7 +145,7 @@ function createPrismaMock() {
     },
     orderItem: {
       findMany: jest
-        .fn<Promise<{ productId: string; quantity: number }[]>, [unknown]>()
+        .fn<Promise<{ variantId: string; quantity: number }[]>, [unknown]>()
         .mockResolvedValue([]),
     },
   };
@@ -158,16 +160,21 @@ function createPrismaMock() {
 
 function createProductsMock() {
   return {
-    findByIds: jest.fn<
+    findSellableByVariantIds: jest.fn<
       Promise<
         {
           id: string;
-          name: string;
-          slug: string;
-          priceCents: number;
-          status: ProductStatus;
+          label: string;
+          position: number;
           stockQuantity: number;
-          weightGrams: number | null;
+          product: {
+            id: string;
+            name: string;
+            slug: string;
+            priceCents: number;
+            status: ProductStatus;
+            weightGrams: number | null;
+          };
         }[]
       >,
       [string[]]
@@ -312,25 +319,35 @@ function userWith(permissions: Permission[] = []): AuthenticatedUser {
   return { id: 'user-1', role: 'customer', permissions: new Set(permissions) };
 }
 
-function sellableProduct(
-  id: string,
+/**
+ * One sellable size, as the catalogue contract hands it over: the variant
+ * carries the stock, its product carries the price and the weight.
+ */
+function sellableVariant(
+  productId: string,
   priceCents: number,
-  name = `Product ${id}`,
+  name = `Product ${productId}`,
+  label = 'M',
 ) {
   return {
-    id,
-    name,
-    slug: id,
-    priceCents,
-    status: ProductStatus.ACTIVE,
+    id: `${productId}-${label.toLowerCase()}`,
+    label,
+    position: 1,
     stockQuantity: 10,
-    // Null on purpose: most of the catalogue predates the weight column, so
-    // the default-weight path is the one the tests exercise by default.
-    weightGrams: null,
+    product: {
+      id: productId,
+      name,
+      slug: productId,
+      priceCents,
+      status: ProductStatus.ACTIVE,
+      // Null on purpose: most of the catalogue predates the weight column, so
+      // the default-weight path is the one the tests exercise by default.
+      weightGrams: null as number | null,
+    },
   };
 }
 
-function cartWith(items: { productId: string; quantity: number }[]) {
+function cartWith(items: { variantId: string; quantity: number }[]) {
   return { id: 'cart-1', items };
 }
 
@@ -343,14 +360,14 @@ describe('OrdersService', () => {
     function primeHappyPath(mocks: Mocks) {
       mocks.prisma.cart.findUnique.mockResolvedValue(
         cartWith([
-          { productId: 'p1', quantity: 2 },
-          { productId: 'p2', quantity: 1 },
+          { variantId: 'p1-m', quantity: 2 },
+          { variantId: 'p2-único', quantity: 1 },
         ]),
       );
       mocks.prisma.cartItem.deleteMany.mockResolvedValue({ count: 2 });
-      mocks.products.findByIds.mockResolvedValue([
-        sellableProduct('p1', 1000, 'Camiseta'),
-        sellableProduct('p2', 2500, 'Caneca'),
+      mocks.products.findSellableByVariantIds.mockResolvedValue([
+        sellableVariant('p1', 1000, 'Camiseta', 'M'),
+        sellableVariant('p2', 2500, 'Caneca', 'Único'),
       ]);
     }
 
@@ -374,7 +391,9 @@ describe('OrdersService', () => {
             items: {
               create: {
                 productId: string;
+                variantId: string;
                 productName: string;
+                variantLabel: string;
                 unitPriceCents: number;
                 quantity: number;
               }[];
@@ -393,36 +412,44 @@ describe('OrdersService', () => {
       expect(args.data.shippingMethodName).toBe('Entrega padrão');
       expect(args.data.shippingEtaDays).toBe(10);
       expect(args.data.shippingLine1).toBe(ADDRESS.line1);
+      // The size travels beside the name, frozen: renaming M later must not
+      // rewrite what this order says was bought.
       expect(args.data.items.create).toEqual([
         {
           productId: 'p1',
+          variantId: 'p1-m',
           productName: 'Camiseta',
+          variantLabel: 'M',
           unitPriceCents: 1000,
           quantity: 2,
         },
         {
           productId: 'p2',
+          variantId: 'p2-único',
           productName: 'Caneca',
+          variantLabel: 'Único',
           unitPriceCents: 2500,
           quantity: 1,
         },
       ]);
     });
 
-    it('decrements every item inside the transaction', async () => {
+    it('decrements every VARIANT inside the transaction', async () => {
       const mocks = createMocks();
       primeHappyPath(mocks);
 
       await serviceWith(mocks).checkout('user-1', checkoutInput());
 
       expect(mocks.prisma.$transaction).toHaveBeenCalledTimes(1);
+      // Variant ids, not product ids: the size is what has stock now, and
+      // taking units off the wrong one is the bug this asserts against.
       expect(mocks.stock.decrement).toHaveBeenCalledWith(
-        'p1',
+        'p1-m',
         2,
         expect.anything(),
       );
       expect(mocks.stock.decrement).toHaveBeenCalledWith(
-        'p2',
+        'p2-único',
         1,
         expect.anything(),
       );
@@ -532,27 +559,39 @@ describe('OrdersService', () => {
       expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it('409s naming the products that are no longer for sale, before any write', async () => {
+    it('409s naming the pieces that are no longer for sale, before any write', async () => {
       const mocks = createMocks();
       mocks.prisma.cart.findUnique.mockResolvedValue(
         cartWith([
-          { productId: 'p1', quantity: 1 },
-          { productId: 'p2', quantity: 1 },
+          { variantId: 'p1-m', quantity: 1 },
+          { variantId: 'p2-m', quantity: 1 },
         ]),
       );
-      mocks.products.findByIds.mockResolvedValue([
-        sellableProduct('p1', 1000),
+      const archived = sellableVariant('p2', 2500, 'Caneca');
+      mocks.products.findSellableByVariantIds.mockResolvedValue([
+        sellableVariant('p1', 1000),
         {
-          ...sellableProduct('p2', 2500),
-          status: ProductStatus.ARCHIVED,
+          ...archived,
+          product: { ...archived.product, status: ProductStatus.ARCHIVED },
         },
       ]);
 
       const attempt = serviceWith(mocks).checkout('user-1', checkoutInput());
 
       await expect(attempt).rejects.toThrow(ConflictException);
+      // The PIECE, not just an id: "Caneca" alone would be ambiguous the
+      // moment a product has more than one size.
       await expect(attempt).rejects.toMatchObject({
-        response: expect.objectContaining({ productIds: ['p2'] }) as unknown,
+        response: expect.objectContaining({
+          unavailableItems: [
+            {
+              variantId: 'p2-m',
+              productId: 'p2',
+              productName: 'Caneca',
+              variantLabel: 'M',
+            },
+          ],
+        }) as unknown,
       });
       expect(mocks.prisma.$transaction).not.toHaveBeenCalled();
     });
@@ -567,7 +606,16 @@ describe('OrdersService', () => {
 
       await expect(attempt).rejects.toThrow(ConflictException);
       await expect(attempt).rejects.toMatchObject({
-        response: expect.objectContaining({ productIds: ['p2'] }) as unknown,
+        response: expect.objectContaining({
+          unavailableItems: [
+            {
+              variantId: 'p2-único',
+              productId: 'p2',
+              productName: 'Caneca',
+              variantLabel: 'Único',
+            },
+          ],
+        }) as unknown,
       });
       // The throw happens inside $transaction, so Prisma rolls everything
       // back; the order must never have been created.
@@ -606,9 +654,10 @@ describe('OrdersService', () => {
     it('carries a real product weight through untouched', async () => {
       const mocks = createMocks();
       primeHappyPath(mocks);
-      mocks.products.findByIds.mockResolvedValue([
-        { ...sellableProduct('p1', 1000, 'Camiseta'), weightGrams: 350 },
-        sellableProduct('p2', 2500, 'Caneca'),
+      const shirt = sellableVariant('p1', 1000, 'Camiseta', 'M');
+      mocks.products.findSellableByVariantIds.mockResolvedValue([
+        { ...shirt, product: { ...shirt.product, weightGrams: 350 } },
+        sellableVariant('p2', 2500, 'Caneca', 'Único'),
       ]);
 
       await serviceWith(mocks).checkout('user-1', checkoutInput());
@@ -828,7 +877,9 @@ describe('OrdersService', () => {
           items: [
             {
               productId: 'p1',
+              variantId: 'p1-m',
               productName: 'Camiseta',
+              variantLabel: 'M',
               unitPriceCents: 1000,
               quantity: 2,
             },
@@ -857,8 +908,10 @@ describe('OrdersService', () => {
         status: OrderStatus.CREATED,
       });
       expect(args.data.status).toBe(OrderStatus.CANCELLED);
+      // The size the units came off, not the product: putting them back on
+      // the wrong variant would be an invisible oversell of another size.
       expect(mocks.stock.restock).toHaveBeenCalledWith(
-        'p1',
+        'p1-m',
         2,
         expect.anything(),
       );
@@ -1133,7 +1186,7 @@ describe('OrdersService', () => {
       );
       mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
       mocks.prisma.orderItem.findMany.mockResolvedValue([
-        { productId: 'p1', quantity: 2 },
+        { variantId: 'p1-m', quantity: 2 },
       ]);
     }
 
@@ -1157,8 +1210,10 @@ describe('OrdersService', () => {
       expect(args.where).toEqual({ id: 'order-1', status: OrderStatus.PAID });
       expect(args.data.status).toBe(OrderStatus.REFUNDED);
       expect(args.data.refundRef).toBe('re_1');
+      // The size the units came off, not the product: putting them back on
+      // the wrong variant would be an invisible oversell of another size.
       expect(mocks.stock.restock).toHaveBeenCalledWith(
-        'p1',
+        'p1-m',
         2,
         expect.anything(),
       );

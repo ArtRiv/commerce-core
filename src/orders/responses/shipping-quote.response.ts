@@ -23,6 +23,13 @@ export class ShippingOptionResponse {
 
   @ApiProperty({ nullable: true, type: String, example: 'Correios' })
   carrier: string | null;
+
+  @ApiProperty({
+    description:
+      'THE AMOUNT THAT WILL BE CHARGED if the customer picks this option — `itemsSubtotalCents + priceCents`. It is what a checkout button renders ("Finalizar pedido — R$ 522,30") before any order exists, and it is the same number POST /orders produces as `totalCents`. On a free option it equals the subtotal exactly: zero is a real price, not a missing one.',
+    example: 52230,
+  })
+  orderTotalCents: number;
 }
 
 /**
@@ -37,4 +44,11 @@ export class ShippingOptionResponse {
 export class ShippingQuoteResponse {
   @ApiProperty({ type: [ShippingOptionResponse] })
   options: ShippingOptionResponse[];
+
+  @ApiProperty({
+    description:
+      'The item subtotal of the cart this quote was measured against — the same number GET /cart reports, from the same definition. Present even when `options` is empty: what the cart is worth is a fact about the cart, not about whether anyone will carry it.',
+    example: 49740,
+  })
+  itemsSubtotalCents: number;
 }
