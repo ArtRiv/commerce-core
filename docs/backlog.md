@@ -8,6 +8,10 @@ Isto é o complemento de [`known-issues.md`](known-issues.md), que é só para o
 que está *errado*. Aqui está o que falta, e o "adiado" de cada spec continua
 sendo o registro do que já foi decidido a favor de não fazer.
 
+O levantamento do que um **painel administrativo** precisa — o que já existe,
+o que falta e se a fundação aguenta — está em [`admin-api.md`](admin-api.md),
+separado porque é uma frente inteira e não uma entrada de lista.
+
 Formato: o que a loja precisou, o que o backend tem hoje, por que não foi feito
 na hora, e um esboço do que fazer.
 
