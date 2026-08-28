@@ -3982,6 +3982,31 @@
           "quotedShippingCents"
         ]
       },
+      "OrderBuyerResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Null on an account created through Google, which never passed through registration and so never set one. Display has to survive it.",
+            "example": "Marina Duarte"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "marina@example.com"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email"
+        ]
+      },
       "OrderItemResponse": {
         "type": "object",
         "properties": {
@@ -4070,6 +4095,16 @@
             "type": "string",
             "format": "uuid",
             "description": "The buyer."
+          },
+          "buyer": {
+            "nullable": true,
+            "description": "Who placed the order — **only for a caller holding `orders.read`**, and null for everyone else, the buyer included. Null rather than absent: the field is always in the contract and only its value varies.\n\nIt names the buyer of *this order*; it is not a customer directory. Listing customers is a different surface and does not exist yet.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderBuyerResponse"
+              }
+            ]
           },
           "status": {
             "type": "string",
@@ -4226,6 +4261,7 @@
         "required": [
           "id",
           "userId",
+          "buyer",
           "status",
           "itemsSubtotalCents",
           "shippingCents",
@@ -4280,6 +4316,16 @@
             "type": "string",
             "format": "uuid",
             "description": "The buyer."
+          },
+          "buyer": {
+            "nullable": true,
+            "description": "Who placed the order — **only for a caller holding `orders.read`**, and null for everyone else, the buyer included. Null rather than absent: the field is always in the contract and only its value varies.\n\nIt names the buyer of *this order*; it is not a customer directory. Listing customers is a different surface and does not exist yet.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderBuyerResponse"
+              }
+            ]
           },
           "status": {
             "type": "string",
@@ -4426,6 +4472,7 @@
         "required": [
           "id",
           "userId",
+          "buyer",
           "status",
           "itemsSubtotalCents",
           "shippingCents",

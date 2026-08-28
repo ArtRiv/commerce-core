@@ -202,8 +202,10 @@ export class OrdersController {
   @ApiOkResponse({ type: OrderResponse })
   @ApiNotFound('No such order.')
   @ApiConflict('The order is not CREATED.')
-  markPaid(@Param('id') id: string) {
-    return this.orders.markPaid(id);
+  markPaid(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    // No paymentIntentRef: money recorded by hand never had one. The caller
+    // rides in third so the webhook, which has neither, keeps its signature.
+    return this.orders.markPaid(id, undefined, user);
   }
 
   /**
@@ -223,8 +225,8 @@ export class OrdersController {
   @ApiOkResponse({ type: OrderResponse })
   @ApiNotFound('No such order.')
   @ApiConflict('The order is not PAID.')
-  refund(@Param('id') id: string) {
-    return this.orders.refund(id);
+  refund(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.orders.refund(id, user);
   }
 
   /** Tracking details are optional — see ShipOrderDto for why. */
@@ -241,8 +243,12 @@ export class OrdersController {
   @ApiBadRequest('`trackingUrl` is not a valid URL.')
   @ApiNotFound('No such order.')
   @ApiConflict('The order is not PAID.')
-  ship(@Param('id') id: string, @Body() dto: ShipOrderDto) {
-    return this.orders.ship(id, dto);
+  ship(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ShipOrderDto,
+  ) {
+    return this.orders.ship(id, dto, user);
   }
 
   @RequirePermissions(PERMISSIONS.ORDERS_UPDATE_STATUS)
@@ -256,7 +262,7 @@ export class OrdersController {
   @ApiOkResponse({ type: OrderResponse })
   @ApiNotFound('No such order.')
   @ApiConflict('The order is not SHIPPED.')
-  deliver(@Param('id') id: string) {
-    return this.orders.deliver(id);
+  deliver(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.orders.deliver(id, user);
   }
 }

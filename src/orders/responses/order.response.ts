@@ -83,12 +83,45 @@ export class PaymentSessionResponse {
   expiresAt: Date;
 }
 
+/**
+ * Who bought, for a back office that has to show a person rather than a UUID.
+ *
+ * Three fields, declared one at a time. `User` also carries `passwordHash`
+ * and `googleId`, and this class existing — instead of the user object being
+ * passed through — is what keeps them out of a response (docs/admin-api.md,
+ * item 2, and docs/specs/order-buyer.md).
+ */
+export class OrderBuyerResponse {
+  @ApiProperty({ format: 'uuid' })
+  id: string;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description:
+      'Null on an account created through Google, which never passed through registration and so never set one. Display has to survive it.',
+    example: 'Marina Duarte',
+  })
+  name: string | null;
+
+  @ApiProperty({ format: 'email', example: 'marina@example.com' })
+  email: string;
+}
+
 export class OrderResponse {
   @ApiProperty({ format: 'uuid' })
   id: string;
 
   @ApiProperty({ format: 'uuid', description: 'The buyer.' })
   userId: string;
+
+  @ApiProperty({
+    type: OrderBuyerResponse,
+    nullable: true,
+    description:
+      'Who placed the order — **only for a caller holding `orders.read`**, and null for everyone else, the buyer included. Null rather than absent: the field is always in the contract and only its value varies.\n\nIt names the buyer of *this order*; it is not a customer directory. Listing customers is a different surface and does not exist yet.',
+  })
+  buyer: OrderBuyerResponse | null;
 
   @ApiProperty({
     enum: OrderStatus,
