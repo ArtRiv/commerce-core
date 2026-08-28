@@ -45,6 +45,39 @@ O e2e não é onde o design é descoberto — isso já aconteceu no passo 2.
 Ele existe pra pegar regressão de integração (guard errado, rota
 errada, serialização de DTO, etc.).
 
+### Contra qual banco
+
+A suíte dá **`TRUNCATE`** nas tabelas que toca. Ela nunca roda contra o
+`DATABASE_URL`: roda contra o **`E2E_DATABASE_URL`**, que é obrigatório —
+sem ele a suíte não começa, em vez de rodar contra o que estiver no `.env`.
+
+Não é preciso um banco a mais. É o mesmo banco num **schema** só dele:
+
+```bash
+# uma vez, e de novo toda vez que uma migration nova entrar
+pnpm e2e:setup
+pnpm test:e2e
+```
+
+`E2E_DATABASE_URL` é o `DATABASE_URL` com um parâmetro a mais —
+`?options=-c%20search_path%3De2e` — e o `.env.example` traz o formato.
+`pnpm e2e:setup` derruba e reconstrói o schema `e2e` aplicando **as
+migrations de verdade, na ordem**, e depois roda o mesmo seed da produção,
+então o banco de teste não pode divergir para uma forma que a produção
+nunca teve.
+
+Duas travas, porque errar aqui apaga dado real e não dá pra desfazer:
+
+1. **O script e a suíte recusam `public`.** O schema é lido da URL e
+   conferido contra o `current_schema()` que o servidor responde — a string
+   é uma alegação, a pergunta ao servidor é o fato.
+2. **O schema sai da URL uma vez só** (`src/prisma/connection-schema.ts`) e
+   vai tanto para o `search_path` quanto para o adaptador do Prisma. Isso não
+   é zelo: SQL cru resolve nome por `search_path`, e o Prisma **não** — sem
+   um schema configurado ele qualifica tudo com `public`. Com as duas metades
+   saindo de fontes diferentes, uma suíte "isolada" trunca o schema de teste
+   vazio e lê e escreve o de verdade, com todos os testes passando.
+
 ## 4. Atualizar os docs de arquitetura
 
 Se o módulo passou a depender de outro módulo, ou a integração externa

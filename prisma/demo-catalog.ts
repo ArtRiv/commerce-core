@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 
 import { PrismaClient } from '../src/generated/prisma/client';
+import { schemaFromConnectionString } from '../src/prisma/connection-schema';
 
 /**
  * A small demonstration catalogue, kept deliberately separate from
@@ -33,7 +34,13 @@ if (!connectionString) {
 }
 
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString }),
+  // Honours a schema pinned in the URL, like every other client in this repo:
+  // a script that writes a demo catalogue has to land where the URL says, not
+  // in `public` regardless (src/prisma/connection-schema.ts).
+  adapter: new PrismaPg(
+    { connectionString },
+    { schema: schemaFromConnectionString(connectionString) },
+  ),
 });
 
 /** What a product with no sizes of its own carries. Never absent. */

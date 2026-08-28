@@ -44,8 +44,11 @@ const CONTROLLERS = [
  * 39 since product variants: `PATCH /products/{id}/stock` became
  * `PATCH /products/{id}/variants/{variantId}/stock` (net zero) and
  * `POST /products/{id}/variants` arrived (net one).
+ *
+ * 42 since variant management: renaming, reordering and removing a variant
+ * (docs/specs/variant-management.md).
  */
-const EXPECTED_ROUTE_COUNT = 39;
+const EXPECTED_ROUTE_COUNT = 42;
 
 const HTTP_METHOD = new Map<RequestMethod, string>([
   [RequestMethod.GET, 'get'],

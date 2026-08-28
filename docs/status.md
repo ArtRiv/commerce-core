@@ -103,7 +103,8 @@ está nas "decisões adiadas" da spec correspondente e no fim de
 ## Buracos conhecidos
 
 Registrados, não esquecidos — [`known-issues.md`](known-issues.md) tem o
-detalhe e o esboço de correção de cada um:
+detalhe e o esboço de correção de cada um. O que **falta** e ainda não foi
+decidido, pedido por uma loja real, está em [`backlog.md`](backlog.md):
 
 - Carrinho não tem teto cumulativo por item.
 - Identificadores do Stripe (`cs_`, `pi_`, `re_`) saem em toda leitura de

@@ -66,15 +66,43 @@ function createPrismaMock() {
     },
     productVariant: {
       findFirst: jest
-        .fn<Promise<{ id: string } | null>, [unknown]>()
+        .fn<Promise<{ id: string; label?: string } | null>, [unknown]>()
         .mockResolvedValue(null),
       findMany: jest.fn<Promise<unknown[]>, [unknown]>().mockResolvedValue([]),
       create: jest.fn<Promise<unknown>, [unknown]>().mockResolvedValue({}),
+      update: jest.fn<Promise<unknown>, [unknown]>().mockResolvedValue({}),
+      delete: jest.fn<Promise<unknown>, [unknown]>().mockResolvedValue({}),
+    },
+    cartItem: {
+      count: jest.fn<Promise<number>, [unknown]>().mockResolvedValue(0),
+      deleteMany: jest
+        .fn<Promise<{ count: number }>, [unknown]>()
+        .mockResolvedValue({ count: 0 }),
+    },
+    orderItem: {
+      count: jest.fn<Promise<number>, [unknown]>().mockResolvedValue(0),
     },
     category: {
       count: jest.fn<Promise<number>, [unknown]>().mockResolvedValue(0),
     },
-    $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+    /** The row-locking SELECT: returns the variant ids it locked. */
+    $queryRaw: jest
+      .fn<Promise<{ id: string }[]>, unknown[]>()
+      .mockResolvedValue([]),
+    /**
+     * Both shapes the service uses. The array form runs the promises; the
+     * interactive form is handed THIS SAME client as its `tx`, so a test can
+     * assert that a write happened inside the transaction by asserting on the
+     * mock it already holds.
+     */
+    $transaction: jest.fn(
+      (
+        arg: Promise<unknown>[] | ((tx: unknown) => Promise<unknown>),
+        // The explicit return type breaks the circular inference of a mock
+        // that hands itself back as the transaction client.
+      ): Promise<unknown> =>
+        typeof arg === 'function' ? arg(client) : Promise.all(arg),
+    ),
   };
 
   return client;
@@ -703,6 +731,321 @@ describe('ProductsService', () => {
       await expect(
         serviceWith(prisma).addVariant('product-1', { label: 'M' }),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('appends past the HIGHEST position, not past the count', async () => {
+      // Sparse positions are reachable two ways: a caller choosing them at
+      // create time, and — once removal exists — deleting from the middle.
+      // Defaulting to the COUNT would land the new size on top of an
+      // existing one, and "the end of the list" would be decided by a UUID
+      // tiebreaker instead of by position.
+      const prisma = createPrismaMock();
+      prisma.product.findUnique.mockResolvedValue(
+        productRow({
+          variants: [
+            { id: 'v1', label: 'P', position: 0, stockQuantity: 1 },
+            { id: 'v3', label: 'G', position: 2, stockQuantity: 1 },
+          ],
+        }),
+      );
+
+      await serviceWith(prisma).addVariant('product-1', { label: 'GG' });
+
+      const [args] = prisma.productVariant.create.mock.calls[0] as [
+        { data: { position: number } },
+      ];
+      expect(args.data.position).toBe(3);
+    });
+  });
+
+  describe('renameVariant', () => {
+    /** The variant as the ownership lookup reads it back. */
+    function ownedVariant(label = 'M') {
+      return { id: 'variant-1', label };
+    }
+
+    it('renames, and leaves order history alone by construction', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst
+        .mockResolvedValueOnce(ownedVariant('M'))
+        .mockResolvedValueOnce(null);
+      prisma.product.findUnique.mockResolvedValue(productRow());
+
+      await serviceWith(prisma).renameVariant(
+        'product-1',
+        'variant-1',
+        'Médio',
+      );
+
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'variant-1' },
+        data: { label: 'Médio' },
+      });
+      // Nothing else is touched: order_items.variant_label is a snapshot, so
+      // a rename cannot reach a placed order even if it wanted to.
+      expect(prisma.orderItem.count).not.toHaveBeenCalled();
+    });
+
+    it('409s a label another size of the same product already holds', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst
+        .mockResolvedValueOnce(ownedVariant('M'))
+        .mockResolvedValueOnce({ id: 'variant-2', label: 'P' });
+
+      await expect(
+        serviceWith(prisma).renameVariant('product-1', 'variant-1', 'P'),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.productVariant.update).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op, not a 409, when renaming a size to what it already is', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValueOnce(ownedVariant('M'));
+      prisma.product.findUnique.mockResolvedValue(productRow());
+
+      await serviceWith(prisma).renameVariant('product-1', 'variant-1', 'M');
+
+      // The uniqueness check would find the row itself and call it a clash.
+      expect(prisma.productVariant.update).not.toHaveBeenCalled();
+    });
+
+    it('404s a variant that belongs to another product', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValueOnce(null);
+
+      await expect(
+        serviceWith(prisma).renameVariant('product-1', 'someone-elses', 'G'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('turns a concurrent rename into the same 409 rather than a 500', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst
+        .mockResolvedValueOnce(ownedVariant('M'))
+        .mockResolvedValueOnce(null);
+      prisma.productVariant.update.mockRejectedValue({ code: 'P2002' });
+
+      await expect(
+        serviceWith(prisma).renameVariant('product-1', 'variant-1', 'G'),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('reorderVariants', () => {
+    function withVariants(prisma: PrismaMock, ids: string[]) {
+      prisma.productVariant.findMany.mockResolvedValue(
+        ids.map((id) => ({ id })),
+      );
+      prisma.product.findUnique.mockResolvedValue(productRow());
+    }
+
+    it('writes positions as the index in the list sent, in one transaction', async () => {
+      const prisma = createPrismaMock();
+      withVariants(prisma, ['p', 'm', 'g']);
+
+      await serviceWith(prisma).reorderVariants('product-1', ['g', 'p', 'm']);
+
+      expect(prisma.productVariant.update.mock.calls.map(([a]) => a)).toEqual([
+        { where: { id: 'g' }, data: { position: 0 } },
+        { where: { id: 'p' }, data: { position: 1 } },
+        { where: { id: 'm' }, data: { position: 2 } },
+      ]);
+      // One transaction, so a failure halfway cannot leave half an order.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('400s a partial list, a repeated id, and a stranger', async () => {
+      const service = () => {
+        const prisma = createPrismaMock();
+        withVariants(prisma, ['p', 'm', 'g']);
+        return serviceWith(prisma);
+      };
+
+      // A partial reorder has no correct reading: it does not say where the
+      // sizes it omitted are supposed to go.
+      await expect(
+        service().reorderVariants('product-1', ['g', 'p']),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service().reorderVariants('product-1', ['g', 'p', 'p']),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service().reorderVariants('product-1', ['g', 'p', 'someone-elses']),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('accepts the single-variant product as a no-op', async () => {
+      const prisma = createPrismaMock();
+      withVariants(prisma, ['only']);
+
+      await serviceWith(prisma).reorderVariants('product-1', ['only']);
+
+      expect(prisma.productVariant.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('404s a product that does not exist', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findMany.mockResolvedValue([]);
+
+      await expect(
+        serviceWith(prisma).reorderVariants('ghost', ['whatever']),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('removeVariant', () => {
+    const KEEP = { discardCartLines: false };
+
+    /**
+     * Wires the happy path: the variant belongs to the product, the lock
+     * returns the product's variant ids, nothing was sold, no carts hold it.
+     */
+    function withRemovable(
+      prisma: PrismaMock,
+      { locked = ['variant-1', 'variant-2'], carts = 0, sold = 0 } = {},
+    ) {
+      prisma.productVariant.findFirst.mockResolvedValue({ id: 'variant-1' });
+      prisma.$queryRaw.mockResolvedValue(locked.map((id) => ({ id })));
+      prisma.orderItem.count.mockResolvedValue(sold);
+      prisma.cartItem.count.mockResolvedValue(carts);
+      prisma.product.findUnique.mockResolvedValue(productRow());
+    }
+
+    it('removes the size, and deletes the cart lines ITSELF, inside the transaction', async () => {
+      const prisma = createPrismaMock();
+      withRemovable(prisma, { carts: 3 });
+
+      await serviceWith(prisma).removeVariant('product-1', 'variant-1', {
+        discardCartLines: true,
+        expectedCartLineCount: 3,
+      });
+
+      // The FK cascade would do this on its own. Doing it explicitly is the
+      // point: the business rule lives in code that can be read and tested,
+      // not in a constraint definition nobody opens.
+      expect(prisma.cartItem.deleteMany).toHaveBeenCalledWith({
+        where: { variantId: 'variant-1' },
+      });
+      expect(prisma.productVariant.delete).toHaveBeenCalledWith({
+        where: { id: 'variant-1' },
+      });
+      // Both writes went through the interactive transaction, which is what
+      // makes them atomic with the recount that authorised them.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.$queryRaw).toHaveBeenCalled();
+    });
+
+    it('refuses the last variant, and no flag can override it', async () => {
+      const prisma = createPrismaMock();
+      withRemovable(prisma, { locked: ['variant-1'] });
+
+      await expect(
+        serviceWith(prisma).removeVariant('product-1', 'variant-1', {
+          discardCartLines: true,
+          expectedCartLineCount: 0,
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.productVariant.delete).not.toHaveBeenCalled();
+    });
+
+    it('refuses a size that has been sold, before the FK has to', async () => {
+      const prisma = createPrismaMock();
+      withRemovable(prisma, { sold: 1 });
+
+      await expect(
+        serviceWith(prisma).removeVariant('product-1', 'variant-1', KEEP),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.productVariant.delete).not.toHaveBeenCalled();
+    });
+
+    it('translates the FK violation into the same 409, never a 500', async () => {
+      // The pre-check is the message; RESTRICT is the guarantee. A checkout
+      // committing between the two lands here.
+      const prisma = createPrismaMock();
+      withRemovable(prisma);
+      prisma.productVariant.delete.mockRejectedValue({ code: 'P2003' });
+
+      await expect(
+        serviceWith(prisma).removeVariant('product-1', 'variant-1', KEEP),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('409s with the cart count when carts hold it and nothing was authorised', async () => {
+      const prisma = createPrismaMock();
+      withRemovable(prisma, { carts: 3 });
+
+      const error = await serviceWith(prisma)
+        .removeVariant('product-1', 'variant-1', KEEP)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toEqual({
+        message: expect.stringContaining('3') as string,
+        cartLineCount: 3,
+      });
+      expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('aborts when the impact changed since the operator reviewed it', async () => {
+      // A fourth cart arrived between the warning and the confirmation. The
+      // authorisation was for three, so it does not cover this.
+      const prisma = createPrismaMock();
+      withRemovable(prisma, { carts: 4 });
+
+      const error = await serviceWith(prisma)
+        .removeVariant('product-1', 'variant-1', {
+          discardCartLines: true,
+          expectedCartLineCount: 3,
+        })
+        .catch((caught: unknown) => caught);
+
+      expect((error as ConflictException).getResponse()).toEqual({
+        message: expect.stringContaining('4') as string,
+        cartLineCount: 4,
+      });
+      expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.productVariant.delete).not.toHaveBeenCalled();
+    });
+
+    it('aborts when the impact shrank, too — a stale number was not reviewed', async () => {
+      const prisma = createPrismaMock();
+      withRemovable(prisma, { carts: 1 });
+
+      await expect(
+        serviceWith(prisma).removeVariant('product-1', 'variant-1', {
+          discardCartLines: true,
+          expectedCartLineCount: 3,
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.productVariant.delete).not.toHaveBeenCalled();
+    });
+
+    it('400s each half of the confirmation sent without the other', async () => {
+      const prisma = createPrismaMock();
+      withRemovable(prisma);
+
+      // "I authorise" with no reviewed impact is a blank cheque.
+      await expect(
+        serviceWith(prisma).removeVariant('product-1', 'variant-1', {
+          discardCartLines: true,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      // A reviewed impact with no authorisation asks for nothing.
+      await expect(
+        serviceWith(prisma).removeVariant('product-1', 'variant-1', {
+          discardCartLines: false,
+          expectedCartLineCount: 3,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('404s a variant that belongs to another product', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValue(null);
+
+      await expect(
+        serviceWith(prisma).removeVariant('product-1', 'someone-elses', KEEP),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });
