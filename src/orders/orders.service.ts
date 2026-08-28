@@ -129,6 +129,67 @@ const ITEMS_INCLUDE = {
   },
 } as const;
 
+/**
+ * Who bought, named column by column (docs/specs/order-buyer.md).
+ *
+ * Written out rather than `include: { user: true }` for a concrete reason:
+ * `User` carries `passwordHash` and `googleId`, and the generic form is
+ * exactly how a back-office listing hands every password hash to the client
+ * (docs/admin-api.md, item 2). Three columns, and adding a fourth here is a
+ * decision someone has to make on purpose.
+ */
+const BUYER_SELECT = { id: true, name: true, email: true } as const;
+
+/** What every order read carries: its lines, and the buyer behind userId. */
+const ORDER_INCLUDE = {
+  ...ITEMS_INCLUDE,
+  user: { select: BUYER_SELECT },
+} as const;
+
+/** The buyer as a response ever sees them — the three columns, nothing else. */
+export interface OrderBuyerView {
+  id: string;
+  /** Null on an account created through Google, which never had a name set. */
+  name: string | null;
+  email: string;
+}
+
+/**
+ * Whether this request may learn who bought.
+ *
+ * `orders.read` and not `customers.read`: whoever may read anyone's order
+ * already reads the delivery address on it, which identifies more than a
+ * name does. `customers.read` stays reserved for the customer directory,
+ * which is a different surface and lists people with no orders at all.
+ *
+ * No caller at all — the payment webhook — is not privileged. It is not a
+ * person, and its response is an acknowledgement rather than an order.
+ */
+function canSeeBuyer(viewer?: AuthenticatedUser): boolean {
+  return viewer?.permissions.has(PERMISSIONS.ORDERS_READ) ?? false;
+}
+
+/**
+ * Swaps the `user` relation for the `buyer` field, or for null.
+ *
+ * The three fields are copied out one at a time rather than passed through,
+ * so a widened `select` upstream still cannot reach a response body. Null
+ * rather than absent: the field is in the contract either way, and a client
+ * that had to handle both `undefined` and `null` would be describing one
+ * state with two shapes.
+ */
+function withBuyer<T extends { user: OrderBuyerView }>(
+  order: T,
+  visible: boolean,
+): Omit<T, 'user'> & { buyer: OrderBuyerView | null } {
+  const { user, ...rest } = order;
+
+  return {
+    ...rest,
+    buyer: visible ? { id: user.id, name: user.name, email: user.email } : null,
+  };
+}
+
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -318,9 +379,11 @@ export class OrdersService {
       );
     }
 
-    const order = payment ? await this.getById(created.id) : created;
+    const order = payment ? await this.getById(created.id, false) : created;
 
-    return { ...order, payment };
+    // Never named on checkout: the buyer is the caller, who did not need this
+    // API to learn their own name (docs/specs/order-buyer.md).
+    return { ...order, buyer: null, payment };
   }
 
   /**
@@ -380,7 +443,7 @@ export class OrdersService {
       );
     }
 
-    return { ...(await this.getById(id)), payment };
+    return { ...(await this.getById(id, canSeeBuyer(user))), payment };
   }
 
   async list(user: AuthenticatedUser, query: ListOrdersInput) {
@@ -416,12 +479,19 @@ export class OrdersService {
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * perPage,
         take: perPage,
-        include: ITEMS_INCLUDE,
+        include: ORDER_INCLUDE,
       }),
       this.prisma.order.count({ where }),
     ]);
 
-    return { items, total, page, perPage };
+    const visible = canSeeBuyer(user);
+
+    return {
+      items: items.map((order) => withBuyer(order, visible)),
+      total,
+      page,
+      perPage,
+    };
   }
 
   async findOne(user: AuthenticatedUser, id: string) {
@@ -429,14 +499,14 @@ export class OrdersService {
 
     const order = await this.prisma.order.findFirst({
       where: { id, ...(canReadAll ? {} : { userId: user.id }) },
-      include: ITEMS_INCLUDE,
+      include: ORDER_INCLUDE,
     });
 
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
-    return order;
+    return withBuyer(order, canReadAll);
   }
 
   async cancel(user: AuthenticatedUser, id: string) {
@@ -502,7 +572,7 @@ export class OrdersService {
       await this.notifications.orderCancelled(id);
     }
 
-    return this.getById(id);
+    return this.getById(id, canReadAll);
   }
 
   /**
@@ -511,7 +581,7 @@ export class OrdersService {
    * Gated by orders.refund at the route, so there is no ownership logic here —
    * refunding is a back-office action, like ship and deliver.
    */
-  async refund(id: string) {
+  async refund(id: string, viewer?: AuthenticatedUser) {
     const order = await this.prisma.order.findUnique({ where: { id } });
 
     if (!order) {
@@ -556,7 +626,7 @@ export class OrdersService {
 
     await this.notifications.orderRefunded(id);
 
-    return this.getById(id);
+    return this.getById(id, canSeeBuyer(viewer));
   }
 
   /**
@@ -584,13 +654,18 @@ export class OrdersService {
    * record a manual payment, and the Stripe webhook calls the same method.
    * Orders' lifecycle does not change when the real provider arrives.
    */
-  async markPaid(id: string, paymentIntentRef?: string) {
+  async markPaid(
+    id: string,
+    paymentIntentRef?: string,
+    viewer?: AuthenticatedUser,
+  ) {
     const order = await this.transition(
       id,
       OrderStatus.CREATED,
       OrderStatus.PAID,
       'paidAt',
       paymentIntentRef ? { paymentIntentRef } : {},
+      viewer,
     );
 
     // Reached only because the conditional UPDATE above changed a row, which
@@ -609,7 +684,11 @@ export class OrdersService {
    * shipment with no code — a courier, a local hand-off — is still a
    * shipment, so an absent code leaves the columns null rather than blocking.
    */
-  async ship(id: string, tracking: OrderTracking = {}) {
+  async ship(
+    id: string,
+    tracking: OrderTracking = {},
+    viewer?: AuthenticatedUser,
+  ) {
     const order = await this.transition(
       id,
       OrderStatus.PAID,
@@ -621,6 +700,7 @@ export class OrdersService {
           : {}),
         ...(tracking.trackingUrl ? { trackingUrl: tracking.trackingUrl } : {}),
       },
+      viewer,
     );
 
     // After the write, so the email reads the tracking details this call just
@@ -630,12 +710,14 @@ export class OrdersService {
     return order;
   }
 
-  deliver(id: string) {
+  deliver(id: string, viewer?: AuthenticatedUser) {
     return this.transition(
       id,
       OrderStatus.SHIPPED,
       OrderStatus.DELIVERED,
       'deliveredAt',
+      {},
+      viewer,
     );
   }
 
@@ -769,6 +851,8 @@ export class OrdersService {
     to: OrderStatus,
     stamp: 'paidAt' | 'shippedAt' | 'deliveredAt',
     extra: Prisma.OrderUpdateManyMutationInput = {},
+    // Absent for the payment webhook, which drives markPaid with no caller.
+    viewer?: AuthenticatedUser,
   ) {
     const { count } = await this.prisma.order.updateMany({
       where: { id, status: from },
@@ -790,19 +874,19 @@ export class OrdersService {
       );
     }
 
-    return this.getById(id);
+    return this.getById(id, canSeeBuyer(viewer));
   }
 
-  private async getById(id: string) {
+  private async getById(id: string, buyerVisible: boolean) {
     const order = await this.prisma.order.findUnique({
       where: { id },
-      include: ITEMS_INCLUDE,
+      include: ORDER_INCLUDE,
     });
 
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
-    return order;
+    return withBuyer(order, buyerVisible);
   }
 }

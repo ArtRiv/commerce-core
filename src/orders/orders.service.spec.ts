@@ -74,6 +74,12 @@ interface OrderRow {
     unitPriceCents: number;
     quantity: number;
   }[];
+  /**
+   * Exactly the three columns the include selects, and no more. A mock
+   * carrying the whole `User` would let a leak of `passwordHash` pass these
+   * tests — the narrowness here is part of the assertion.
+   */
+  user: { id: string; name: string | null; email: string };
 }
 
 function orderRow(overrides: Partial<OrderRow> = {}): OrderRow {
@@ -91,6 +97,7 @@ function orderRow(overrides: Partial<OrderRow> = {}): OrderRow {
     paymentRef: null,
     paymentIntentRef: null,
     items: [],
+    user: { id: 'user-1', name: 'Marina Duarte', email: 'marina@example.com' },
     ...overrides,
   };
 }
@@ -867,6 +874,201 @@ describe('OrdersService', () => {
         { where: { id: string; userId?: string } },
       ];
       expect(args.where).toEqual({ id: 'order-1' });
+    });
+  });
+
+  /**
+   * Who bought, on the order itself (docs/specs/order-buyer.md).
+   *
+   * Two things are being protected here and they are not the same thing. One
+   * is the permission rule — `orders.read` sees the buyer, nobody else does.
+   * The other is the shape: `User` carries `passwordHash` and `googleId`, and
+   * the cheap way to leak them is a spread or an `include: { user: true }`.
+   * So the select is asserted as well as the output.
+   */
+  describe('buyer', () => {
+    const BUYER = {
+      id: 'user-1',
+      name: 'Marina Duarte',
+      email: 'marina@example.com',
+    };
+
+    /** The three columns, and only those three. */
+    const BUYER_SELECT = { id: true, name: true, email: true };
+
+    it('names the buyer for a caller holding orders.read', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findFirst.mockResolvedValue(orderRow());
+
+      const order = await serviceWith(mocks).findOne(
+        userWith([PERMISSIONS.ORDERS_READ]),
+        'order-1',
+      );
+
+      expect(order.buyer).toEqual(BUYER);
+    });
+
+    it('withholds the buyer from a plain customer reading their own order', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findFirst.mockResolvedValue(orderRow());
+
+      const order = await serviceWith(mocks).findOne(userWith(), 'order-1');
+
+      // Null rather than absent: the field is in the contract either way, and
+      // a customer does not need this API to learn their own name.
+      expect(order.buyer).toBeNull();
+      // The rest of the order is untouched by the withholding.
+      expect(order.totalCents).toBe(6490);
+    });
+
+    it('selects only id, name and email — never the whole User', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findFirst.mockResolvedValue(orderRow());
+
+      await serviceWith(mocks).findOne(
+        userWith([PERMISSIONS.ORDERS_READ]),
+        'order-1',
+      );
+
+      const [args] = mocks.prisma.order.findFirst.mock.calls[0] as [
+        { include: { user: { select: Record<string, boolean> } } },
+      ];
+      // `toEqual` and not `toMatchObject`: an extra column added here later is
+      // exactly the regression this test exists to catch.
+      expect(args.include.user.select).toEqual(BUYER_SELECT);
+    });
+
+    it('never lets a User column reach the response, even if the row carries one', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findFirst.mockResolvedValue(
+        orderRow({
+          // A row shaped as if someone had widened the select. The mapper must
+          // still hand over the three fields and nothing else.
+          user: {
+            ...BUYER,
+            passwordHash: '$2b$10$leaked',
+            googleId: 'g-1',
+          } as OrderRow['user'],
+        }),
+      );
+
+      const order = await serviceWith(mocks).findOne(
+        userWith([PERMISSIONS.ORDERS_READ]),
+        'order-1',
+      );
+
+      expect(order.buyer).toEqual(BUYER);
+      expect(JSON.stringify(order)).not.toContain('leaked');
+      expect(JSON.stringify(order)).not.toContain('passwordHash');
+      // The relation itself does not survive the mapping under any name.
+      expect(order).not.toHaveProperty('user');
+    });
+
+    it('carries a null name for an account that never had one', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findFirst.mockResolvedValue(
+        // A Google sign-up never passes through RegisterDto, so User.name is
+        // nullable and the panel has to survive it.
+        orderRow({
+          user: { id: 'user-1', name: null, email: 'g@example.com' },
+        }),
+      );
+
+      const order = await serviceWith(mocks).findOne(
+        userWith([PERMISSIONS.ORDERS_READ]),
+        'order-1',
+      );
+
+      expect(order.buyer).toEqual({
+        id: 'user-1',
+        name: null,
+        email: 'g@example.com',
+      });
+    });
+
+    it('names the buyer on every item of a privileged listing', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findMany.mockResolvedValue([
+        orderRow({ id: 'order-1' }),
+        orderRow({
+          id: 'order-2',
+          user: {
+            id: 'user-2',
+            name: 'Caio Ribeiro',
+            email: 'caio@example.com',
+          },
+        }),
+      ]);
+      mocks.prisma.order.count.mockResolvedValue(2);
+
+      const page = await serviceWith(mocks).list(
+        userWith([PERMISSIONS.ORDERS_READ]),
+        {},
+      );
+
+      expect(page.items.map((order) => order.buyer?.email)).toEqual([
+        'marina@example.com',
+        'caio@example.com',
+      ]);
+    });
+
+    it('withholds the buyer from every item of an unprivileged listing', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findMany.mockResolvedValue([
+        orderRow({ id: 'order-1' }),
+        orderRow({ id: 'order-2' }),
+      ]);
+      mocks.prisma.order.count.mockResolvedValue(2);
+
+      const page = await serviceWith(mocks).list(userWith(), {});
+
+      expect(page.items.map((order) => order.buyer)).toEqual([null, null]);
+    });
+
+    it('names the buyer on a transition made by someone who may read orders', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ status: OrderStatus.SHIPPED }),
+      );
+
+      const order = await serviceWith(mocks).ship(
+        'order-1',
+        {},
+        userWith([PERMISSIONS.ORDERS_UPDATE_STATUS, PERMISSIONS.ORDERS_READ]),
+      );
+
+      // The panel re-renders the detail from this response; without the buyer
+      // the customer card would empty out on every transition.
+      expect(order.buyer).toEqual(BUYER);
+    });
+
+    it('withholds it from an operator who may ship but may not read orders', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ status: OrderStatus.SHIPPED }),
+      );
+
+      // The two permissions are independent — authorisation is per permission,
+      // never per role — so this operator exists and gets the same answer the
+      // rule gives everywhere else.
+      const order = await serviceWith(mocks).ship(
+        'order-1',
+        {},
+        userWith([PERMISSIONS.ORDERS_UPDATE_STATUS]),
+      );
+
+      expect(order.buyer).toBeNull();
+    });
+
+    it('withholds it from the webhook, which has no caller at all', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ status: OrderStatus.PAID }),
+      );
+
+      const order = await serviceWith(mocks).markPaid('order-1', 'pi_1');
+
+      expect(order.buyer).toBeNull();
     });
   });
 
