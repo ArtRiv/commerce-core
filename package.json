@@ -28,7 +28,8 @@
     "test:e2e": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
     "prepare": "husky",
     "openapi:generate": "nest build && node dist/src/openapi/generate.js",
-    "demo:catalog": "tsx prisma/demo-catalog.ts"
+    "demo:catalog": "tsx prisma/demo-catalog.ts",
+    "e2e:setup": "tsx prisma/e2e-schema.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

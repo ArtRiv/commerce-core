@@ -21,6 +21,54 @@ const STRIPE_TEST_ENV = {
   STRIPE_WEBHOOK_SECRET: 'whsec_test_offline',
 };
 
+/**
+ * Points the whole suite at the throwaway schema, and refuses to run if it
+ * cannot.
+ *
+ * These tests TRUNCATE the tables they touch. Left to DATABASE_URL they would
+ * do that to the development database — which is also the one serving the
+ * published store (docs/admin-api.md). So the URL is not defaulted, it is
+ * REQUIRED: a machine that has not been set up gets an error naming the fix,
+ * never a run against whatever .env happened to hold.
+ *
+ * Build the schema with `pnpm e2e:setup`; prisma/e2e-schema.ts explains how
+ * the isolation works.
+ */
+function requireDisposableDatabase(): void {
+  const url = process.env.E2E_DATABASE_URL;
+
+  if (!url) {
+    throw new Error(
+      'E2E_DATABASE_URL is not set. The e2e suite truncates tables and must never run against DATABASE_URL. Run `pnpm e2e:setup` and see docs/workflow.md.',
+    );
+  }
+
+  // ConfigModule loads .env without overriding what is already in the
+  // environment, so this wins over the development URL.
+  process.env.DATABASE_URL = url;
+}
+
+/**
+ * Asks the server which schema the connection actually landed in.
+ *
+ * The parsed URL is a claim; this is the fact. A typo in the `options`
+ * parameter silently leaves the connection in `public`, where the first
+ * TRUNCATE would take the real catalogue with it — so the run stops here
+ * instead.
+ */
+async function assertNotPublicSchema(prisma: PrismaService): Promise<void> {
+  const rows = await prisma.$queryRaw<
+    { schema: string | null }[]
+  >`SELECT current_schema() AS schema`;
+  const schema = rows[0]?.schema;
+
+  if (!schema || schema === 'public') {
+    throw new Error(
+      `E2E_DATABASE_URL resolves to schema "${String(schema)}". The e2e suite refuses to truncate public — pin a schema with ?options=-c%20search_path%3De2e`,
+    );
+  }
+}
+
 export interface TestApp {
   app: INestApplication<App>;
   prisma: PrismaService;
@@ -55,6 +103,7 @@ export interface TestApp {
  * raw-body handling and event translation are all genuinely under test.
  */
 export async function createTestApp(): Promise<TestApp> {
+  requireDisposableDatabase();
   Object.assign(process.env, STRIPE_TEST_ENV);
 
   const mail = new FakeMailService();
@@ -77,11 +126,14 @@ export async function createTestApp(): Promise<TestApp> {
   });
   await app.init();
 
+  const prisma = app.get(PrismaService);
+  await assertNotPublicSchema(prisma);
+
   const storage = app.get<ThrottlerStorageService>(ThrottlerStorage);
 
   return {
     app,
-    prisma: app.get(PrismaService),
+    prisma,
     mail,
     stripe,
     webhookSecret: STRIPE_TEST_ENV.STRIPE_WEBHOOK_SECRET,
