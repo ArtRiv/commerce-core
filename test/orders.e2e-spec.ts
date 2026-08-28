@@ -59,6 +59,8 @@ interface ShippingOptionResponse {
 interface OrderResponse {
   id: string;
   userId: string;
+  /** Only for a caller holding orders.read — null for everyone else. */
+  buyer: { id: string; name: string | null; email: string } | null;
   status: OrderStatus;
   itemsSubtotalCents: number;
   shippingCents: number;
@@ -95,11 +97,14 @@ describe('Orders (e2e)', () => {
   let operatorToken: string;
   let customerToken: string;
   let customerBToken: string;
+  /** Kept in scope so the buyer tests can assert it never reaches the wire. */
+  let customerPasswordHash: string;
 
   beforeAll(async () => {
     ({ app, prisma, resetRateLimits } = await createTestApp());
     const passwords = app.get(PasswordService);
     const passwordHash = await passwords.hash(PASSWORD);
+    customerPasswordHash = passwordHash;
 
     await resetOrdersTables(prisma);
     await resetAuthTables(prisma);
@@ -989,6 +994,135 @@ describe('Orders (e2e)', () => {
         .query({ userId: '00000000-0000-4000-8000-000000000000' })
         .set('Authorization', `Bearer ${customerToken}`)
         .expect(403);
+    });
+  });
+
+  /**
+   * Who bought, on the wire (docs/specs/order-buyer.md).
+   *
+   * The unit tests already pin the permission rule against a mocked row. What
+   * only a real database can falsify is the other half: that the Prisma
+   * include really does narrow to three columns, so nothing else about a
+   * `User` — `passwordHash` above all — can reach a response body. That claim
+   * is about a query, and a mock cannot disprove it.
+   */
+  describe('buyer', () => {
+    /** Everything on the users table that must never leave the server. */
+    const NEVER_ON_THE_WIRE = [
+      'passwordHash',
+      'password_hash',
+      'googleId',
+      'google_id',
+      'emailVerifiedAt',
+      'email_verified_at',
+      'roleId',
+      'role_id',
+    ];
+
+    async function ownOrder(): Promise<OrderResponse> {
+      const product = await createProduct();
+      await addToCart(customerToken, onlyVariant(product), 1);
+      return checkedOutOrder(customerToken);
+    }
+
+    it('names the buyer for orders.read, and only the three columns', async () => {
+      const order = await ownOrder();
+
+      const response = await http()
+        .get(`/orders/${order.id}`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .expect(200);
+
+      const { buyer } = response.body as OrderResponse;
+
+      expect(buyer).toEqual({
+        id: order.userId,
+        name: 'Catalog customer',
+        email: 'orders-customer@example.com',
+      });
+      // The shape itself is the assertion: a widened select would add keys
+      // here long before anyone noticed a leak in a screen.
+      expect(Object.keys(buyer ?? {}).sort()).toEqual(['email', 'id', 'name']);
+    });
+
+    it('never lets a users column reach the wire', async () => {
+      const order = await ownOrder();
+
+      const response = await http()
+        .get(`/orders/${order.id}`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .expect(200);
+
+      // The whole body, not just `buyer` — a leak that arrived through some
+      // other relation would still be a leak.
+      const raw = JSON.stringify(response.body);
+      for (const column of NEVER_ON_THE_WIRE) {
+        expect(raw).not.toContain(column);
+      }
+      // And the hash itself is not there under any key, spelled any way.
+      expect(raw).not.toContain(customerPasswordHash);
+    });
+
+    it('withholds the buyer from the customer reading their own order', async () => {
+      const order = await ownOrder();
+
+      const response = await http()
+        .get(`/orders/${order.id}`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+
+      const body = response.body as OrderResponse;
+      // Null, not missing: the field is in the contract for every caller.
+      expect(body.buyer).toBeNull();
+      expect(body).toHaveProperty('buyer');
+      expect(body.totalCents).toBeGreaterThan(0);
+    });
+
+    it('names a buyer on every item of a privileged listing, and none of an own one', async () => {
+      const product = await createProduct({ stockQuantity: 20 });
+      await addToCart(customerToken, onlyVariant(product), 1);
+      await checkedOutOrder(customerToken);
+      await addToCart(customerBToken, onlyVariant(product), 1);
+      await checkedOutOrder(customerBToken);
+
+      const all = await http()
+        .get('/orders')
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .expect(200);
+      const allBody = all.body as { items: OrderResponse[] };
+      expect(allBody.items).toHaveLength(2);
+      expect(allBody.items.map((order) => order.buyer?.email).sort()).toEqual([
+        'orders-customer-b@example.com',
+        'orders-customer@example.com',
+      ]);
+
+      const own = await http()
+        .get('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+      const ownBody = own.body as { items: OrderResponse[] };
+      expect(ownBody.items.map((order) => order.buyer)).toEqual([null]);
+    });
+
+    it('keeps naming the buyer across a back-office transition', async () => {
+      const order = await ownOrder();
+
+      // The panel re-renders its detail from these responses, so the customer
+      // card has to survive mark-paid → ship → deliver.
+      const paid = await transition(order.id, 'mark-paid', operatorToken);
+      expect(paid.buyer?.email).toBe('orders-customer@example.com');
+
+      const shipped = await transition(order.id, 'ship', operatorToken);
+      expect(shipped.buyer?.email).toBe('orders-customer@example.com');
+
+      const delivered = await transition(order.id, 'deliver', operatorToken);
+      expect(delivered.buyer?.email).toBe('orders-customer@example.com');
+    });
+
+    it('withholds it on checkout, where the buyer is the caller', async () => {
+      const order = await ownOrder();
+
+      expect(order.buyer).toBeNull();
     });
   });
 });

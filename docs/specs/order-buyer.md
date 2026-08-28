@@ -2,7 +2,23 @@
 
 ## Status
 
-`draft`
+`implementado`
+
+**502 testes unitários** (10 novos) e **43 e2e no arquivo de pedidos** (6
+novos), com `lint:check`, `typecheck` e `build` limpos e o `openapi.json`
+regenerado — **42 operações, as mesmas de antes**: esta mudança não abre rota
+nenhuma, só nomeia um campo que faltava.
+
+Os seis e2e existem por uma razão que os unitários não cobrem. O teste de
+permissão roda contra uma linha simulada e prova a regra; o que só um banco de
+verdade falsifica é a outra metade — que o `include` do Prisma realmente
+estreita para três colunas, e que portanto nada mais de `User` chega a um
+corpo de resposta. Isso é uma afirmação sobre uma consulta, e mock nenhum
+refuta.
+
+Um deles compara o corpo inteiro, serializado, com o hash de senha real do
+comprador — o valor, não o nome do campo. Um vazamento que chegasse por outra
+relação, ou sob outro nome, ainda cairia nesse teste.
 
 ## Objetivo
 
@@ -107,23 +123,23 @@ export class OrderResponse {
 
 ## Critérios de aceitação
 
-- [ ] Dado um chamador com `orders.read`, quando lê `GET /orders/{id}` de
+- [x] Dado um chamador com `orders.read`, quando lê `GET /orders/{id}` de
       outra pessoa, então `buyer` traz `id`, `name` e `email` do comprador
-- [ ] Dado um chamador com `orders.read`, quando lista `GET /orders`, então
+- [x] Dado um chamador com `orders.read`, quando lista `GET /orders`, então
       **todo** item traz seu próprio `buyer`
-- [ ] Dado um cliente comum, quando lê o próprio pedido, então `buyer` é
+- [x] Dado um cliente comum, quando lê o próprio pedido, então `buyer` é
       `null` — e o pedido continua respondendo tudo o mais
-- [ ] Dado um cliente comum, quando lista os próprios pedidos, então nenhum
+- [x] Dado um cliente comum, quando lista os próprios pedidos, então nenhum
       item traz `buyer`
-- [ ] Dado qualquer chamador, quando a resposta é montada, então ela **não**
+- [x] Dado qualquer chamador, quando a resposta é montada, então ela **não**
       contém `passwordHash`, `googleId`, `emailVerifiedAt`, `roleId` nem
       qualquer outro campo de `User`
-- [ ] Dado um comprador sem nome (conta do Google), quando um operador lê o
+- [x] Dado um comprador sem nome (conta do Google), quando um operador lê o
       pedido, então `buyer.name` é `null` e `buyer.email` está preenchido
-- [ ] Dado um operador com `orders.update_status`, quando chama
+- [x] Dado um operador com `orders.update_status`, quando chama
       `POST /orders/{id}/ship`, então a resposta traz `buyer` se ele também
       tiver `orders.read`, e `null` se não tiver
-- [ ] Dado o webhook do processador, quando ele move um pedido para `PAID`,
+- [x] Dado o webhook do processador, quando ele move um pedido para `PAID`,
       então nada quebra por não haver chamador
 
 ## Edge cases conhecidos
