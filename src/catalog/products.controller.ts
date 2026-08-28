@@ -15,6 +15,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
@@ -33,6 +34,9 @@ import {
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateVariantDto } from './dto/create-variant.dto';
 import { ListProductsQueryDto } from './dto/list-products-query.dto';
+import { RemoveVariantQueryDto } from './dto/remove-variant-query.dto';
+import { RenameVariantDto } from './dto/rename-variant.dto';
+import { ReorderVariantsDto } from './dto/reorder-variants.dto';
 import { SetStockDto } from './dto/set-stock.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductsService } from './products.service';
@@ -40,6 +44,7 @@ import {
   PaginatedProductsResponse,
   ProductResponse,
 } from './responses/product.response';
+import { VariantInCartsResponse } from './responses/variant-in-carts.response';
 import { StockService } from './stock.service';
 
 /**
@@ -137,7 +142,7 @@ export class ProductsController {
   @ApiOperation({
     summary: 'Add a size to a product',
     description:
-      'Adds one variant. `position` defaults to the end of the list; `stockQuantity` defaults to 0, which is a real state — the size exists and has none left.\n\nThere is deliberately no route to rename, reorder or remove a variant. Adding cannot invalidate anything; removing has to decide what happens to a size somebody already bought, and that is a policy decision rather than a detail (docs/specs/product-variants.md).',
+      'Adds one variant. `position` defaults to one past the highest in use — the end of the list — and `stockQuantity` defaults to 0, which is a real state: the size exists and has none left.\n\nRenaming, reordering and removing are the three routes below (docs/specs/variant-management.md). Removal is the only one that can refuse: a size that was sold, or the last one a product has, stays.',
   })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiCreatedResponse({
@@ -149,6 +154,92 @@ export class ProductsController {
   @ApiNotFound('No product with that id.')
   addVariant(@Param('id') id: string, @Body() dto: CreateVariantDto) {
     return this.products.addVariant(id, dto);
+  }
+
+  /**
+   * DECLARED BEFORE the rename route below, and that is load-bearing: the two
+   * paths have the same shape, so with the order reversed `order` would be
+   * captured as a `variantId` and reordering would answer an inexplicable 404.
+   * There is an e2e regression test for exactly this, because an innocent
+   * reshuffle of methods in this file would break it silently.
+   */
+  @RequirePermissions(PERMISSIONS.PRODUCTS_UPDATE)
+  @Patch(':id/variants/order')
+  @ApiOperation({
+    summary: 'Reorder a product’s sizes',
+    description:
+      'Restates the whole display order: send **exactly** this product’s variants, in the order they should appear, and each `position` becomes its index in that list.\n\nA partial list is a 400 rather than a partial reorder — it does not say where the sizes it omitted should go. All positions are written in one transaction, so a failure cannot leave half an ordering behind.\n\nOrdering is explicit because alphabetical is wrong: P/M/G/GG/XGG sorts to G, GG, M, P, XGG.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiOkResponse({ type: ProductResponse })
+  @ApiBadRequest(
+    '`variantIds` is not exactly this product’s variants — one missing, one repeated, or one belonging to another product.',
+  )
+  @ApiNotFound('No product with that id.')
+  reorderVariants(@Param('id') id: string, @Body() dto: ReorderVariantsDto) {
+    return this.products.reorderVariants(id, dto.variantIds);
+  }
+
+  @RequirePermissions(PERMISSIONS.PRODUCTS_UPDATE)
+  @Patch(':id/variants/:variantId')
+  @ApiOperation({
+    summary: 'Rename a size',
+    description:
+      '**Placed orders are untouched.** `OrderItem.variantLabel` is a snapshot taken at purchase, so renaming a size cannot rewrite what somebody bought — which is exactly why this operation is safe and why the snapshot exists.\n\nCarts are the deliberate opposite: they hold no snapshot, so a cart line immediately shows the new label. That is the current truth a cart promises.\n\nRenaming a size to the label it already has does nothing and answers 200.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'variantId', format: 'uuid' })
+  @ApiOkResponse({ type: ProductResponse })
+  @ApiBadRequest('`label` is empty or longer than 20 characters.')
+  @ApiConflict('Another size of this product already has that label.')
+  @ApiNotFound('No such product, or that variant does not belong to it.')
+  renameVariant(
+    @Param('id') id: string,
+    @Param('variantId') variantId: string,
+    @Body() dto: RenameVariantDto,
+  ) {
+    return this.products.renameVariant(id, variantId, dto.label);
+  }
+
+  /**
+   * Gated on products.delete rather than products.update, unlike the two
+   * PATCHes above: this is the only variant operation that destroys anything —
+   * the size's stock, and potentially other people's cart lines. It sits with
+   * archiving a product and deleting a category, which is what that permission
+   * already governs.
+   */
+  @RequirePermissions(PERMISSIONS.PRODUCTS_DELETE)
+  @Delete(':id/variants/:variantId')
+  @ApiOperation({
+    summary: 'Remove a size',
+    description:
+      'Three refusals, in the order you cannot argue with them:\n\n1. **The last variant never goes.** Every product has at least one size, always — one with none is unbuyable. No parameter overrides this; archive the product instead (`DELETE /products/{id}`).\n2. **A size somebody bought never goes.** Order items reference it forever and the database RESTRICTs the deletion; this route turns that refusal into a 409 with a sentence rather than a 500. If a size is stuck this way, **rename it** — that is the escape hatch, and it costs history nothing.\n3. **Carts do not veto, but they are not discarded silently either.** A size sitting in any cart is a 409 carrying `cartLineCount`. To go through, send both `discardCartLines=true` (authorising the destruction) and `expectedCartLineCount` (confirming the impact you just reviewed). The count is taken again under a row lock inside the transaction: if it changed in either direction, nothing is deleted and the 409 carries the new number.\n\nThe variant and the cart lines are removed by this route, in one transaction — not left to the FK cascade, which remains only as a referential safety net.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'variantId', format: 'uuid' })
+  @ApiOkResponse({
+    type: ProductResponse,
+    description: 'The product, now without that size.',
+  })
+  @ApiBadRequest(
+    'One half of the confirmation was sent without the other, or `discardCartLines` was neither `true` nor `false`.',
+  )
+  @ApiResponse({
+    status: 409,
+    type: VariantInCartsResponse,
+    description:
+      'Refused: it is the last variant, it has been sold, or carts hold it and the impact was not authorised and confirmed. Only the cart cases carry `cartLineCount`.',
+  })
+  @ApiNotFound('No such product, or that variant does not belong to it.')
+  removeVariant(
+    @Param('id') id: string,
+    @Param('variantId') variantId: string,
+    @Query() query: RemoveVariantQueryDto,
+  ) {
+    return this.products.removeVariant(id, variantId, {
+      discardCartLines: query.discardCartLines ?? false,
+      expectedCartLineCount: query.expectedCartLineCount,
+    });
   }
 
   @RequirePermissions(PERMISSIONS.PRODUCTS_UPDATE)

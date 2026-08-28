@@ -805,7 +805,7 @@
     },
     "/products/{id}/variants": {
       "post": {
-        "description": "Adds one variant. `position` defaults to the end of the list; `stockQuantity` defaults to 0, which is a real state — the size exists and has none left.\n\nThere is deliberately no route to rename, reorder or remove a variant. Adding cannot invalidate anything; removing has to decide what happens to a size somebody already bought, and that is a policy decision rather than a detail (docs/specs/product-variants.md).",
+        "description": "Adds one variant. `position` defaults to one past the highest in use — the end of the list — and `stockQuantity` defaults to 0, which is a real state: the size exists and has none left.\n\nRenaming, reordering and removing are the three routes below (docs/specs/variant-management.md). Removal is the only one that can refuse: a size that was sold, or the last one a product has, stays.",
         "operationId": "ProductsController_addVariant",
         "parameters": [
           {
@@ -896,6 +896,317 @@
           }
         ],
         "summary": "Add a size to a product",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/products/{id}/variants/order": {
+      "patch": {
+        "description": "Restates the whole display order: send **exactly** this product’s variants, in the order they should appear, and each `position` becomes its index in that list.\n\nA partial list is a 400 rather than a partial reorder — it does not say where the sizes it omitted should go. All positions are written in one transaction, so a failure cannot leave half an ordering behind.\n\nOrdering is explicit because alphabetical is wrong: P/M/G/GG/XGG sorts to G, GG, M, P, XGG.",
+        "operationId": "ProductsController_reorderVariants",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderVariantsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`variantIds` is not exactly this product’s variants — one missing, one repeated, or one belonging to another product.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `products.update` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No product with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reorder a product’s sizes",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/products/{id}/variants/{variantId}": {
+      "patch": {
+        "description": "**Placed orders are untouched.** `OrderItem.variantLabel` is a snapshot taken at purchase, so renaming a size cannot rewrite what somebody bought — which is exactly why this operation is safe and why the snapshot exists.\n\nCarts are the deliberate opposite: they hold no snapshot, so a cart line immediately shows the new label. That is the current truth a cart promises.\n\nRenaming a size to the label it already has does nothing and answers 200.",
+        "operationId": "ProductsController_renameVariant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "variantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameVariantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`label` is empty or longer than 20 characters.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `products.update` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product, or that variant does not belong to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another size of this product already has that label.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rename a size",
+        "tags": [
+          "products"
+        ]
+      },
+      "delete": {
+        "description": "Three refusals, in the order you cannot argue with them:\n\n1. **The last variant never goes.** Every product has at least one size, always — one with none is unbuyable. No parameter overrides this; archive the product instead (`DELETE /products/{id}`).\n2. **A size somebody bought never goes.** Order items reference it forever and the database RESTRICTs the deletion; this route turns that refusal into a 409 with a sentence rather than a 500. If a size is stuck this way, **rename it** — that is the escape hatch, and it costs history nothing.\n3. **Carts do not veto, but they are not discarded silently either.** A size sitting in any cart is a 409 carrying `cartLineCount`. To go through, send both `discardCartLines=true` (authorising the destruction) and `expectedCartLineCount` (confirming the impact you just reviewed). The count is taken again under a row lock inside the transaction: if it changed in either direction, nothing is deleted and the 409 carries the new number.\n\nThe variant and the cart lines are removed by this route, in one transaction — not left to the FK cascade, which remains only as a referential safety net.",
+        "operationId": "ProductsController_removeVariant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "variantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "discardCartLines",
+            "required": false,
+            "in": "query",
+            "description": "Authorises deleting the cart lines of everyone holding this size. Omit it and a size sitting in any cart is refused with a 409 carrying the count.\n\nMust be sent together with `expectedCartLineCount`. Named for what it does rather than `force`, because it cannot be ticked without reading the consequence.",
+            "schema": {
+              "example": true,
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "expectedCartLineCount",
+            "required": false,
+            "in": "query",
+            "description": "The `cartLineCount` from the 409 you just reviewed. The count is taken again under a row lock inside the deletion transaction, and **any** difference — in either direction — aborts the whole thing with a 409 carrying the current number, changing nothing. A fourth cart arriving between the warning and the confirmation is therefore never deleted unseen.",
+            "schema": {
+              "minimum": 0,
+              "example": 3,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The product, now without that size.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "One half of the confirmation was sent without the other, or `discardCartLines` was neither `true` nor `false`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `products.delete` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product, or that variant does not belong to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: it is the last variant, it has been sold, or carts hold it and the impact was not authorised and confirmed. Only the cart cases carry `cartLineCount`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariantInCartsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Remove a size",
         "tags": [
           "products"
         ]
@@ -3217,6 +3528,63 @@
         "required": [
           "name",
           "priceCents"
+        ]
+      },
+      "ReorderVariantsDto": {
+        "type": "object",
+        "properties": {
+          "variantIds": {
+            "maxItems": 200,
+            "description": "**Exactly** this product's variants, in the order they should display — no repeats, none missing, none belonging to another product. Anything else is a 400 rather than a partial reorder.\n\n`position` becomes the index in this array, so the list you send is the list you get back.",
+            "example": [
+              "3f1c0a5e-1d9b-4a1e-8c2f-6a0b7d5e4c31",
+              "9b2d1e6f-2c8a-4b7d-9e3f-1a5c8d7b2e40"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "variantIds"
+        ]
+      },
+      "RenameVariantDto": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "The new label. Must be unique within the product — a label another size already holds is a 409. Renaming a size to what it already is does nothing and answers 200.\n\n**Placed orders are unaffected**: `OrderItem.variantLabel` is a snapshot taken at purchase. Carts are the opposite and equally deliberate — they hold no snapshot, so a cart line starts showing the new label immediately.",
+            "example": "Médio"
+          }
+        },
+        "required": [
+          "label"
+        ]
+      },
+      "VariantInCartsResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Human-readable, and names the count in both variations.",
+            "examples": [
+              "This size is in 3 shopping carts",
+              "Cart line count changed from 3 to 4; review and confirm again"
+            ]
+          },
+          "cartLineCount": {
+            "type": "number",
+            "description": "How many cart lines hold this size **right now**. Send it back as `expectedCartLineCount` to confirm you reviewed this impact.",
+            "example": 3
+          }
+        },
+        "required": [
+          "message",
+          "cartLineCount"
         ]
       },
       "SetStockDto": {

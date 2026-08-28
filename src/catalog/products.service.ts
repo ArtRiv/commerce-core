@@ -106,6 +106,41 @@ const ORDER_BY: Record<
 export const SINGLE_VARIANT_LABEL = 'Único';
 
 /**
+ * The two halves of a destructive confirmation, which only mean something
+ * together (docs/specs/variant-management.md).
+ *
+ * `discardCartLines` is the AUTHORISATION — "I accept deleting other people's
+ * cart lines". `expectedCartLineCount` is the CONFIRMED IMPACT — "the damage I
+ * reviewed was this big". Authorising the class of action is not the same as
+ * accepting any size of it, so an authorisation without a reviewed number is a
+ * blank cheque and is refused.
+ */
+export interface RemoveVariantConfirmation {
+  discardCartLines: boolean;
+  expectedCartLineCount?: number;
+}
+
+/** Prisma's unique-constraint violation — a label already on this product. */
+const UNIQUE_VIOLATION = 'P2002';
+
+/**
+ * Prisma's foreign-key violation. Here it means order_items RESTRICTing the
+ * deletion of a size somebody bought — the guarantee behind the pre-check.
+ */
+const FOREIGN_KEY_VIOLATION = 'P2003';
+
+function hasPrismaCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === code
+  );
+}
+
+/** Kept identical wherever the refusal is raised, pre-check or FK. */
+const SOLD_VARIANT_MESSAGE = 'This size has been sold and cannot be removed';
+
+/**
  * Position first, id as the tiebreaker — the same shape every ordering in this
  * service has, and for the same reason: without it two variants sharing a
  * position can swap places between two reads.
@@ -234,10 +269,193 @@ export class ProductsService {
         // Appended to the end by default: a new size added later is almost
         // always the next one along, and guessing anything cleverer would be
         // wrong for XGG and for 46 alike.
-        position: input.position ?? product.variants.length,
+        //
+        // Past the HIGHEST position, not past the COUNT — the two only agree
+        // while positions are dense from zero, and they need not be: callers
+        // choose positions at create time, and removing from the middle leaves
+        // a gap. Counting would drop the new size on top of an existing one
+        // and let a UUID tiebreaker decide the display order, which is the one
+        // thing this column exists to prevent.
+        position: input.position ?? this.nextPosition(product.variants),
         stockQuantity: input.stockQuantity ?? 0,
       },
     });
+
+    return this.findById(productId);
+  }
+
+  /**
+   * Renames one size.
+   *
+   * Safe for history by construction: `order_items.variant_label` is a
+   * snapshot taken at purchase, so no placed order is reachable from here. The
+   * cart is the opposite and equally deliberate — it holds no snapshot, so a
+   * line simply starts reading the new label, which is the current truth it
+   * promised (docs/specs/variant-management.md).
+   */
+  async renameVariant(productId: string, variantId: string, label: string) {
+    const variant = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, productId },
+      select: { id: true, label: true },
+    });
+
+    if (!variant) {
+      throw new NotFoundException('Product variant not found');
+    }
+
+    // Renaming a size to what it already is asks for nothing. Skipping here
+    // matters: the uniqueness check below would otherwise find this very row
+    // and report a clash with itself.
+    if (variant.label === label) {
+      return this.findById(productId);
+    }
+
+    const taken = await this.prisma.productVariant.findFirst({
+      where: { productId, label },
+      select: { id: true },
+    });
+
+    if (taken) {
+      throw new ConflictException(
+        `This product already has a "${label}" variant`,
+      );
+    }
+
+    try {
+      await this.prisma.productVariant.update({
+        where: { id: variantId },
+        data: { label },
+      });
+    } catch (error) {
+      // Two renames racing for the same free label: the unique index settles
+      // it, and the loser gets the same 409 the pre-check would have given.
+      if (hasPrismaCode(error, UNIQUE_VIOLATION)) {
+        throw new ConflictException(
+          `This product already has a "${label}" variant`,
+        );
+      }
+      throw error;
+    }
+
+    return this.findById(productId);
+  }
+
+  /**
+   * Rewrites the whole display order in one transaction.
+   *
+   * The body is the EXACT set of the product's variants, in the order wanted,
+   * and positions become the index within it. A partial list is refused rather
+   * than merged: it does not say where the sizes it left out are supposed to
+   * go, and inventing an answer is how an ordering silently stops matching
+   * what the operator saw. Same reasoning as `categoryIds` on PATCH /products,
+   * which also replaces the set instead of merging into it.
+   *
+   * No swap dance is needed because `position` has no uniqueness
+   * (docs/specs/product-variants.md) — the whole list is simply restated.
+   */
+  async reorderVariants(productId: string, variantIds: string[]) {
+    const existing = await this.prisma.productVariant.findMany({
+      where: { productId },
+      select: { id: true },
+    });
+
+    // Every product has at least one variant, so an empty set means the
+    // product itself is not there.
+    if (existing.length === 0) {
+      throw new NotFoundException('Product not found');
+    }
+
+    this.assertIsExactVariantSet(existing, variantIds);
+
+    await this.prisma.$transaction(
+      variantIds.map((id, index) =>
+        this.prisma.productVariant.update({
+          where: { id },
+          data: { position: index },
+        }),
+      ),
+    );
+
+    return this.findById(productId);
+  }
+
+  /**
+   * Removes one size, under the policy in docs/specs/variant-management.md.
+   *
+   * Three walls, in the order the operator cannot argue with them:
+   *
+   * 1. the last variant never goes — a product with none is unbuyable, and no
+   *    flag overrides it (archive the product instead);
+   * 2. a size somebody bought never goes — `order_items` RESTRICTs it, and the
+   *    count here exists to turn that refusal into a sentence;
+   * 3. cart lines do not veto, but they are not discarded by accident either:
+   *    the caller must authorise the destruction AND confirm its size.
+   *
+   * Everything destructive happens inside one transaction that starts by
+   * locking the product's variant rows. That lock is load-bearing: inserting a
+   * cart line takes FOR KEY SHARE on the variant it points at, which FOR
+   * UPDATE conflicts with, so no cart can slip in between the recount and the
+   * delete — and two concurrent removals cannot both read "two variants left"
+   * and both delete one.
+   */
+  async removeVariant(
+    productId: string,
+    variantId: string,
+    confirmation: RemoveVariantConfirmation,
+  ) {
+    this.assertConfirmationIsWhole(confirmation);
+    await this.assertVariantBelongsTo(productId, variantId);
+
+    // Outside the transaction on purpose: it is the message, not the
+    // guarantee. A checkout committing after this point is caught by the FK.
+    const soldCount = await this.prisma.orderItem.count({
+      where: { variantId },
+    });
+
+    if (soldCount > 0) {
+      throw new ConflictException(SOLD_VARIANT_MESSAGE);
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // ORDER BY id so two concurrent removals on the same product take the
+        // rows in the same order and queue instead of deadlocking.
+        const locked = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "product_variants"
+          WHERE "product_id" = ${productId}
+          ORDER BY "id"
+          FOR UPDATE
+        `;
+
+        if (locked.length <= 1) {
+          throw new ConflictException(
+            'A product must keep at least one variant',
+          );
+        }
+
+        // It was there a moment ago; a concurrent removal got it first.
+        if (!locked.some((row) => row.id === variantId)) {
+          throw new NotFoundException('Product variant not found');
+        }
+
+        const cartLineCount = await tx.cartItem.count({ where: { variantId } });
+
+        this.assertImpactWasReviewed(confirmation, cartLineCount);
+
+        // Explicitly, rather than leaving it to onDelete: Cascade. The cascade
+        // stays in the schema as a referential safety net, but a rule that
+        // deletes customer data has to be a line of code somebody can read,
+        // test and find — not a clause in a constraint definition.
+        await tx.cartItem.deleteMany({ where: { variantId } });
+        await tx.productVariant.delete({ where: { id: variantId } });
+      });
+    } catch (error) {
+      // RESTRICT firing means a sale landed between the count and the delete.
+      if (hasPrismaCode(error, FOREIGN_KEY_VIOLATION)) {
+        throw new ConflictException(SOLD_VARIANT_MESSAGE);
+      }
+      throw error;
+    }
 
     return this.findById(productId);
   }
@@ -440,6 +658,95 @@ export class ProductsService {
       // Same 404 for "no such product", "no such variant" and "that variant is
       // someone else's": the caller has no business learning which.
       throw new NotFoundException('Product variant not found');
+    }
+  }
+
+  /** One past the highest position in use — "the end of the list", literally. */
+  private nextPosition(variants: { position: number }[]): number {
+    return variants.reduce(
+      (highest, variant) => Math.max(highest, variant.position + 1),
+      0,
+    );
+  }
+
+  /**
+   * The reorder body has to BE the product's variants: same members, no
+   * repeats, nothing missing, nobody else's.
+   */
+  private assertIsExactVariantSet(
+    existing: { id: string }[],
+    variantIds: string[],
+  ): void {
+    const sent = new Set(variantIds);
+
+    if (sent.size !== variantIds.length) {
+      throw new BadRequestException('variantIds must not repeat a variant');
+    }
+
+    if (
+      sent.size !== existing.length ||
+      existing.some((variant) => !sent.has(variant.id))
+    ) {
+      throw new BadRequestException(
+        "variantIds must list exactly this product's variants, in the order wanted",
+      );
+    }
+  }
+
+  /**
+   * The two halves of the confirmation travel together or not at all.
+   *
+   * An authorisation with no reviewed impact is signed once and good for any
+   * amount of damage; a reviewed impact with no authorisation asks for
+   * nothing. Neither is a request this route can answer honestly.
+   */
+  private assertConfirmationIsWhole(
+    confirmation: RemoveVariantConfirmation,
+  ): void {
+    const hasCount = confirmation.expectedCartLineCount !== undefined;
+
+    if (confirmation.discardCartLines && !hasCount) {
+      throw new BadRequestException(
+        'discardCartLines requires expectedCartLineCount: confirm the impact you reviewed',
+      );
+    }
+
+    if (!confirmation.discardCartLines && hasCount) {
+      throw new BadRequestException(
+        'expectedCartLineCount requires discardCartLines=true',
+      );
+    }
+  }
+
+  /**
+   * Wall 3, decided against a count taken under the row lock.
+   *
+   * A mismatch in EITHER direction aborts, including one where the damage
+   * shrank: the rule is that the impact confirmed is the impact applied, and a
+   * number that no longer describes reality was not reviewed, it was guessed.
+   * The 409 carries the current count so the next attempt is an informed one.
+   */
+  private assertImpactWasReviewed(
+    confirmation: RemoveVariantConfirmation,
+    cartLineCount: number,
+  ): void {
+    if (!confirmation.discardCartLines) {
+      if (cartLineCount > 0) {
+        throw new ConflictException({
+          message: `This size is in ${String(cartLineCount)} shopping carts`,
+          cartLineCount,
+        });
+      }
+      return;
+    }
+
+    if (cartLineCount !== confirmation.expectedCartLineCount) {
+      throw new ConflictException({
+        message: `Cart line count changed from ${String(
+          confirmation.expectedCartLineCount,
+        )} to ${String(cartLineCount)}; review and confirm again`,
+        cartLineCount,
+      });
     }
   }
 
