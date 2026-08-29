@@ -2,7 +2,27 @@
 
 ## Status
 
-`draft`
+`implementado`
+
+**545 testes unitários** (43 novos) e **46 e2e num arquivo próprio**, com
+`lint:check`, `typecheck` e `build` limpos e o `openapi.json` regerado —
+**46 operações**, quatro a mais, num nono controller.
+
+A divisão entre as duas suítes não é arbitrária. Os unitários provam o que é
+**ligado** a cada consulta — e o mais importante deles lê os parâmetros de
+volta para afirmar que `CREATED`, `CANCELLED` e `REFUNDED` nunca chegam ao
+banco como algo a contar. Isso é uma afirmação sobre a construção da query, e
+mock nenhum a esconde.
+
+O que só um Postgres de verdade falsifica é o SQL, e três coisas em especial:
+que uma venda de 01:30 UTC do dia 1º de setembro cai no bucket de **agosto**
+para uma loja em São Paulo; que um mês sem venda volta como zeros e não como
+buraco; e que "não vende" é o complemento exato de "vendeu", contra as mesmas
+linhas.
+
+Os pedidos do e2e são escritos direto no banco, de propósito: `paidAt` é
+carimbado pela máquina de estados e nenhuma rota o retroage, então uma suíte
+dirigindo checkout só conseguiria relatar sobre hoje.
 
 ## Objetivo
 

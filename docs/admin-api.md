@@ -22,7 +22,7 @@ Nada aqui é spec. Cada fatia que for aprovada vira uma spec em
 | Catálogo — variantes | **incompleto**: só criar e repor estoque |
 | Pedidos | **completo** |
 | Clientes | **não existe** — a permissão existe, a rota não |
-| Relatórios | **não existe** — a permissão existe, a rota não |
+| Relatórios | **completo** para as quatro perguntas que o painel fez |
 | Acesso (promover usuário, conceder permissão) | **não existe** em rota; o schema já prevê |
 
 ## Já existe — não reconstrua
@@ -55,6 +55,14 @@ produto não-`ACTIVE` responde **404** a quem não tem `products.read` — não
 403. Pedido de outro cliente, idem. Isso não é descuido de status code: um 403
 confirmaria a quem está sondando que existe algo ali. Toda leitura nova de
 back-office tem que responder 404 pela mesma razão.
+
+**Onde o padrão não se aplica, e por quê** (aprendido em
+[`specs/reports.md`](specs/reports.md), invariante 10): ele protege a
+*existência de um recurso*, então vale para toda rota que recebe um **id**.
+Uma rota que não recebe id nenhum não tem existência a vazar — as quatro de
+relatório respondem **403**, como `POST /orders/{id}/refund` já respondia. O
+que um 403 ali revela é que `/reports` existe, e o documento OpenAPI publicado
+já diz isso.
 
 ---
 
@@ -114,11 +122,23 @@ senha de todo mundo numa listagem de back-office. O DTO de resposta tem que
 ser escrito campo a campo, deliberadamente, como os outros deste repositório
 já são.
 
-### 3. Relatórios — a permissão existe, a rota não
+### 3. Relatórios — ~~a permissão existe, a rota não~~ **feito**
 
-Mesma situação de `reports.read`. Não há urgência: um painel útil se sustenta
-sem dashboard, e faturamento derivado é fácil de calcular errado. Se entrar,
-entra depois de tudo acima.
+Entregue em [`specs/reports.md`](specs/reports.md), fora da ordem sugerida no
+fim deste documento: o painel da AVESSO já estava construído e fazia quatro
+perguntas concretas, o que é gatilho suficiente. `GET /reports/product-sales`,
+`/revenue`, `/carts` e `/unsold-products`, todas gated em `reports.read`.
+
+O aviso que estava aqui — *"faturamento derivado é fácil de calcular errado"* —
+virou metade daquela spec, e as três armadilhas que ele antecipava eram reais:
+o que conta como venda (`CREATED` não é dinheiro; `CANCELLED` e `REFUNDED`
+devolvem estoque), qual relógio usar (`paidAt`, nunca `createdAt`) e em que
+fuso a semana é cortada (em UTC, todo domingo à noite de uma loja brasileira
+cai na semana seguinte).
+
+**As quatro perguntas e nada mais.** Ticket médio, conversão, reembolso por
+período e quebra por tamanho ficaram de fora de propósito, registrados nas
+decisões adiadas da spec.
 
 ### 4. Acesso: promover usuário e conceder permissão
 
@@ -216,7 +236,8 @@ alguém achar que estão resolvidas.
    Depois das duas acima, porque o painel é útil sem ela e perigoso se feita
    com pressa.
 4. **Auditoria**, quando existir a segunda pessoa com acesso.
-5. **Relatórios**, por último, ou nunca.
+5. ~~**Relatórios**, por último, ou nunca.~~ **Feito** — fora de ordem, porque
+   o painel já existia e já perguntava. Ver o item 3.
 
 ## O que não fazer
 
