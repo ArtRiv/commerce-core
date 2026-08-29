@@ -2992,6 +2992,353 @@
           "shipping"
         ]
       }
+    },
+    "/reports/product-sales": {
+      "get": {
+        "description": "How much of each piece left, best-selling first.\n\nA sale is an order that is `PAID`, `SHIPPED` or `DELIVERED`, timed by **`paidAt`** — when the money arrived, not when the cart froze.\n\n`CREATED` does not count: the stock left the shelf but nothing was paid, and half of those orders never are. `CANCELLED` and `REFUNDED` do not count either, and both return their units to stock — so \"units sold\" and \"stock that left the shelf\" keep saying the same thing.\n\nThe window is `[from, to)` — start inclusive, end **exclusive**, so asking for two adjacent months never counts an order twice. Both are optional: omit `to` for now, omit `from` for 30 days before `to`.\n\nRows are grouped by **product id** and named from the live catalogue, so renaming a piece mid-period does not split it into two lines. Sizes are summed together: which size to restock is a different question, and this route does not answer it.\n\n`itemsRevenueCents` is the goods alone, at the price frozen on each order line. Freight is not attributable to a piece and lives on `GET /reports/revenue`.",
+        "operationId": "ReportsController_productSales",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Start of the window, **inclusive**. ISO-8601; a bare date is read as midnight UTC. Omit it for 30 days before `to`.",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-08-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "End of the window, **exclusive** — so two adjacent months never count the same order twice. Omit it for now.\n\nA `from` at or after `to` is a 400, not an empty list: an impossible window is the caller’s bug, and `[]` would read as \"nothing matched\".",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-09-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "description": "Values above 100 are clamped, not rejected.",
+            "schema": {
+              "minimum": 1,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductSalesReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`from` is at or after `to`, or one of them is not an ISO-8601 date.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `reports.read` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Units and revenue per piece, over a period",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/reports/revenue": {
+      "get": {
+        "description": "A continuous series: a bucket with no sales comes back as zeros rather than as a gap, so a bar chart cannot silently skip the bad week. Not paginated — the window already bounds it.\n\nA sale is an order that is `PAID`, `SHIPPED` or `DELIVERED`, timed by **`paidAt`** — when the money arrived, not when the cart froze.\n\n`CREATED` does not count: the stock left the shelf but nothing was paid, and half of those orders never are. `CANCELLED` and `REFUNDED` do not count either, and both return their units to stock — so \"units sold\" and \"stock that left the shelf\" keep saying the same thing.\n\nThe window is `[from, to)` — start inclusive, end **exclusive**, so asking for two adjacent months never counts an order twice. Both are optional: omit `to` for now, omit `from` for 30 days before `to`.\n\nBuckets are cut in the instance's configured time zone (`REPORTS_TIMEZONE`, default `UTC`), reported back as `timeZone`: cutting a Brazilian store's weeks in UTC would push every Sunday evening into the following Monday. `periodStart` is therefore a calendar date, not an instant.\n\n`revenueCents` is what was charged; `itemsSubtotalCents` and `shippingCents` are the two halves of it, broken out because freight is collected rather than earned.",
+        "operationId": "ReportsController_revenue",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Start of the window, **inclusive**. ISO-8601; a bare date is read as midnight UTC. Omit it for 30 days before `to`.",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-08-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "End of the window, **exclusive** — so two adjacent months never count the same order twice. Omit it for now.\n\nA `from` at or after `to` is a 400, not an empty list: an impossible window is the caller’s bug, and `[]` would read as \"nothing matched\".",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-09-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "granularity",
+            "required": false,
+            "in": "query",
+            "description": "Bucket size. Weeks start on **Monday** (ISO), and both are cut in the instance’s configured time zone — see the `timeZone` field on the response.",
+            "schema": {
+              "default": "month",
+              "type": "string",
+              "enum": [
+                "week",
+                "month"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevenueReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`from` is at or after `to`, one of them is not an ISO-8601 date, or `granularity` is outside the enum.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `reports.read` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revenue by week or by month",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/reports/carts": {
+      "get": {
+        "description": "A snapshot, with no period — carts have no history, only a present.\n\n`unitCount` counts **pieces**, not lines: three of one size in one bag is 3. `cartCount` counts carts that hold at least one line, because checkout consumes the items and leaves the cart row alive and empty — counting carts would count everyone who ever bought once.\n\nThis number previously existed only inside the 409 from removing a variant, and not even in this shape: that one counts cart *lines* holding a single size.",
+        "operationId": "ReportsController_carts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartsReportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `reports.read` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "What is sitting in shopping carts right now",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/reports/unsold-products": {
+      "get": {
+        "description": "ACTIVE, holding stock, and with no sale in the window — the three conditions together. A sold-out piece is **not** listed: that is the opposite of not moving. Neither is a DRAFT or ARCHIVED one, which is not for sale to begin with.\n\nA sale is an order that is `PAID`, `SHIPPED` or `DELIVERED`, timed by **`paidAt`** — when the money arrived, not when the cart froze.\n\n`CREATED` does not count: the stock left the shelf but nothing was paid, and half of those orders never are. `CANCELLED` and `REFUNDED` do not count either, and both return their units to stock — so \"units sold\" and \"stock that left the shelf\" keep saying the same thing. The same definition decides \"no sale\", so this list is the exact complement of `GET /reports/product-sales`.\n\nThe window is `[from, to)` — start inclusive, end **exclusive**, so asking for two adjacent months never counts an order twice. Both are optional: omit `to` for now, omit `from` for 30 days before `to`.\n\n`lastSoldAt` reaches outside the window on purpose — it is the last sale of any era, or `null` for a piece that has never sold, which is a different problem from one that stopped.\n\nOrdered by stock descending: the piece with the most capital standing still comes first.",
+        "operationId": "ReportsController_unsoldProducts",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Start of the window, **inclusive**. ISO-8601; a bare date is read as midnight UTC. Omit it for 30 days before `to`.",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-08-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "End of the window, **exclusive** — so two adjacent months never count the same order twice. Omit it for now.\n\nA `from` at or after `to` is a 400, not an empty list: an impossible window is the caller’s bug, and `[]` would read as \"nothing matched\".",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-09-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "description": "Values above 100 are clamped, not rejected.",
+            "schema": {
+              "minimum": 1,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsoldProductsReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`from` is at or after `to`, or one of them is not an ISO-8601 date.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `reports.read` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pieces that are not moving",
+        "tags": [
+          "reports"
+        ]
+      }
     }
   },
   "info": {
@@ -3032,6 +3379,10 @@
     {
       "name": "shipping",
       "description": "Freight quoting."
+    },
+    {
+      "name": "reports",
+      "description": "Read-only aggregates for a back office: what sold, what it earned, what is sitting in carts, and what is not moving. Every route is gated on `reports.read`."
     }
   ],
   "servers": [],
@@ -4641,6 +4992,273 @@
         "required": [
           "options",
           "itemsSubtotalCents"
+        ]
+      },
+      "ProductSalesRowResponse": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "The name the product carries **today**, from the catalogue — not the snapshot frozen onto the order. Rows are grouped by product id, so a piece renamed mid-period is still one line rather than two.",
+            "example": "Camiseta Preta"
+          },
+          "slug": {
+            "type": "string",
+            "example": "camiseta-preta"
+          },
+          "unitsSold": {
+            "type": "number",
+            "description": "Pieces, summed across sizes. Two sizes of one shirt in one order are two order lines and one row here.",
+            "example": 7
+          },
+          "itemsRevenueCents": {
+            "type": "number",
+            "description": "Integer cents, from the **frozen** unit price of each line — what the customer actually paid, not today’s catalogue price. Items only: freight belongs to the order, not to a piece, and lives on `GET /reports/revenue`. Deliberately not called `revenueCents`, so the two are never added together.",
+            "example": 55930
+          },
+          "orderCount": {
+            "type": "number",
+            "description": "How many distinct orders included this piece.",
+            "example": 4
+          }
+        },
+        "required": [
+          "productId",
+          "name",
+          "slug",
+          "unitsSold",
+          "itemsRevenueCents",
+          "orderCount"
+        ]
+      },
+      "ProductSalesReportResponse": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, **exclusive**."
+          },
+          "items": {
+            "description": "Best-selling first. Ties break on product id.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductSalesRowResponse"
+            }
+          },
+          "total": {
+            "type": "number",
+            "description": "Distinct pieces sold in the window, not the page size.",
+            "example": 12
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "perPage": {
+            "type": "number",
+            "description": "Clamped to 100.",
+            "example": 20
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "items",
+          "total",
+          "page",
+          "perPage"
+        ]
+      },
+      "RevenueBucketResponse": {
+        "type": "object",
+        "properties": {
+          "periodStart": {
+            "type": "string",
+            "description": "First day of the bucket, as a **calendar date** in the instance’s time zone — `YYYY-MM-DD`, deliberately not an instant. An instant would invite the browser to re-read it in *its* zone and draw the bar in the previous week, which is the very error the server-side bucketing exists to avoid. Weeks start on Monday.",
+            "example": "2026-08-24"
+          },
+          "revenueCents": {
+            "type": "number",
+            "description": "Integer cents actually charged — `itemsSubtotalCents + shippingCents`, guaranteed, because the same sum is a CHECK constraint on every order.",
+            "example": 59920
+          },
+          "itemsSubtotalCents": {
+            "type": "number",
+            "description": "The goods alone.",
+            "example": 55930
+          },
+          "shippingCents": {
+            "type": "number",
+            "description": "Freight, broken out — it is collected, not earned.",
+            "example": 3990
+          },
+          "orderCount": {
+            "type": "number",
+            "example": 4
+          }
+        },
+        "required": [
+          "periodStart",
+          "revenueCents",
+          "itemsSubtotalCents",
+          "shippingCents",
+          "orderCount"
+        ]
+      },
+      "RevenueReportResponse": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, **exclusive**."
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "week",
+              "month"
+            ],
+            "example": "month"
+          },
+          "timeZone": {
+            "type": "string",
+            "description": "The IANA zone the buckets were cut in (`REPORTS_TIMEZONE`, default `UTC`). It is here because a chart labelled with dates is unreadable without it: cutting a Brazilian store’s weeks in UTC pushes every Sunday evening into the following Monday.",
+            "example": "America/Sao_Paulo"
+          },
+          "buckets": {
+            "description": "Ascending, and **continuous**: a week or month with no sales comes back as zeros rather than as a gap, so a bar chart does not silently skip the bad week. Not paginated — a chart needs the whole series, and the window already bounds it.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueBucketResponse"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "granularity",
+          "timeZone",
+          "buckets"
+        ]
+      },
+      "CartsReportResponse": {
+        "type": "object",
+        "properties": {
+          "unitCount": {
+            "type": "number",
+            "description": "Pieces, not lines: three of one size in one bag counts 3. This is the number `VariantInCartsResponse.cartLineCount` is **not** — that one counts the cart *lines* holding a single variant, which is a different question about a different scope.",
+            "example": 40
+          },
+          "lineCount": {
+            "type": "number",
+            "description": "Cart lines — one per size held, whatever its quantity.",
+            "example": 12
+          },
+          "cartCount": {
+            "type": "number",
+            "description": "Carts holding at least one line. Checkout consumes the items and leaves the cart row alive and empty, so this counts baskets in play rather than everyone who ever bought once.\n\nIt is here because the unit count alone does not read: 40 units across 2 carts and 40 across 30 are opposite situations.",
+            "example": 2
+          }
+        },
+        "required": [
+          "unitCount",
+          "lineCount",
+          "cartCount"
+        ]
+      },
+      "UnsoldProductRowResponse": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Calça Cargo"
+          },
+          "slug": {
+            "type": "string",
+            "example": "calca-cargo"
+          },
+          "stockQuantity": {
+            "type": "number",
+            "description": "Summed across the piece’s sizes. Always greater than zero here — sold out is not \"not moving\", it is the opposite of it.",
+            "example": 12
+          },
+          "lastSoldAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When this piece last sold, **of any era** — not restricted to the window, which by definition holds no sale of it. `null` means it has never sold at all, which is a different problem from having stopped selling."
+          }
+        },
+        "required": [
+          "productId",
+          "name",
+          "slug",
+          "stockQuantity",
+          "lastSoldAt"
+        ]
+      },
+      "UnsoldProductsReportResponse": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the window, inclusive."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the window, **exclusive**."
+          },
+          "items": {
+            "description": "Most stock first — the piece with the most capital standing still is the one a discount gets decided about. Ties break on product id.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnsoldProductRowResponse"
+            }
+          },
+          "total": {
+            "type": "number",
+            "description": "Matching pieces, not the page size.",
+            "example": 3
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "perPage": {
+            "type": "number",
+            "description": "Clamped to 100.",
+            "example": 20
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "items",
+          "total",
+          "page",
+          "perPage"
         ]
       }
     }
