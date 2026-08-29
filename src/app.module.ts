@@ -10,6 +10,7 @@ import { CatalogModule } from './catalog/catalog.module';
 import { MailModule } from './mail/mail.module';
 import { OrdersModule } from './orders/orders.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { PrismaModule } from './prisma/prisma.module';
     AuthModule,
     CatalogModule,
     OrdersModule,
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [

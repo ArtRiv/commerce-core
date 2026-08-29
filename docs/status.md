@@ -45,10 +45,11 @@ critério de sucesso (deploy real).
 | `payments` | Stripe atrás de `PaymentProvider`: Checkout Session (hosted/embedded), webhook assinado, reembolso | [payments](specs/payments.md) |
 | `shipping` | Frete atrás de `ShippingProvider`: tabela por prefixo de CEP e faixa de peso | [shipping](specs/shipping.md) |
 | `mail` | Quatro e-mails transacionais do pedido, atrás de `MailService` | [order-emails](specs/order-emails.md) |
+| `reports` | As quatro perguntas de um back-office: unidades por peça, receita por semana/mês, o que está parado em carrinho, e o que não vende. Só leitura, agregado no banco | [reports](specs/reports.md) |
 | `openapi` | Documento gerado dos decorators, commitado e conferido pelo CI | [openapi](specs/openapi.md) |
 
-Números: **39 rotas** em 8 controllers, **468 testes unitários**,
-**189 e2e**, 11 migrations.
+Números: **46 rotas** em 9 controllers, **545 testes unitários**,
+**258 e2e**, 11 migrations.
 
 ### Autorização
 
@@ -61,7 +62,9 @@ mexe em nenhuma rota. Catálogo em `src/auth/authz/permissions.ts`:
 `customers.read`, `coupons.read|create|update|delete`, `reports.read`.
 
 As de `coupons` existem no catálogo e **não têm feature atrás** — reservadas
-de propósito.
+de propósito. `customers.read` está na mesma situação; `reports.read` deixou de
+estar ([`specs/reports.md`](specs/reports.md)). O que falta para um painel
+completo está levantado em [`admin-api.md`](admin-api.md).
 
 ## Fora do escopo da v1, de propósito
 

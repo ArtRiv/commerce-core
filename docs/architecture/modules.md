@@ -1,10 +1,10 @@
 # Mapa de módulos internos
 
 > Status: real, inteiro. `auth`, `catalog`, `orders`, `payments` (Stripe
-> de verdade), `shipping` (tabela de frete por faixa de CEP), `prisma` e
-> `mail` existem, e as quatro setas que saem de `orders` são código. Se um
-> módulo passar a depender de outro de um jeito não previsto aqui, o
-> diagrama está desatualizado, não o código.
+> de verdade), `shipping` (tabela de frete por faixa de CEP), `reports`,
+> `prisma` e `mail` existem, e as quatro setas que saem de `orders` são
+> código. Se um módulo passar a depender de outro de um jeito não previsto
+> aqui, o diagrama está desatualizado, não o código.
 
 Setas sólidas = depende de (chamada direta via interface/serviço
 injetado). Setas tracejadas = usa utilitário compartilhado, sem
@@ -17,6 +17,7 @@ flowchart LR
     orders["orders"]
     payments["payments"]
     shipping["shipping"]
+    reports["reports"]
     common["common"]
     prisma["prisma"]
     mail["mail"]
@@ -29,6 +30,8 @@ flowchart LR
     auth --> prisma
     auth --> mail
     catalog --> prisma
+    orders --> prisma
+    reports --> prisma
 
     auth -.-> common
     catalog -.-> common
@@ -59,6 +62,21 @@ flowchart LR
   continua dono de preço, peso e ciclo de vida. Nada disso muda a direção de
   seta nenhuma — muda o vocabulário que atravessa a fronteira.
 - `catalog`, `payments` e `shipping` não se conhecem entre si.
+- **`reports` é folha, só de leitura, e é a única exceção à regra acima.**
+  Ele não passa por `ProductsService` nem por `OrdersService`: lê `orders`,
+  `order_items`, `products`, `product_variants` e `cart_items` direto, em SQL
+  agregado. Isso é deliberado e está registrado em
+  [`../specs/reports.md`](../specs/reports.md), invariante 11 — as duas
+  alternativas eram pendurar métodos com cara de relatório (`date_trunc`,
+  `GROUP BY` de semana) em dois serviços que não têm outro motivo para
+  conhecê-los, ou somar dinheiro em JavaScript, que a spec proíbe.
+
+  O que torna a exceção segura é o que o módulo não faz: **nenhuma escrita**,
+  só `SELECT` de agregado, e **não exporta nada** — nenhum outro módulo pode
+  criar dependência nele, então não há ciclo nem porta dos fundos para o
+  domínio. O custo aceito é que essas consultas precisam ser mantidas junto
+  com o schema.
+
 - `auth` não depende de nenhum módulo de domínio. Os outros módulos
   usam `auth` só através de decorators (`@Public()`,
   `@RequirePermissions(...)`, `@CurrentUser()`) e do
@@ -68,8 +86,9 @@ flowchart LR
   seta sólida saindo deles.
 - `prisma` é infraestrutura, não domínio: expõe `PrismaService` como
   módulo global. `auth` depende dele de verdade (seta sólida) — lê
-  usuário, papel e refresh token — e `catalog` também (produtos,
-  categorias, estoque); ele não conhece ninguém de volta.
+  usuário, papel e refresh token —, `catalog` também (produtos, categorias,
+  estoque), `orders` também (pedidos, carrinhos, eventos de pagamento) e
+  `reports` só dele depende; ele não conhece ninguém de volta.
 - `mail` é infraestrutura também: expõe uma interface (`MailService`) via
   token, com o adapter do Resend escondido atrás — mesmo padrão de
   `payments`/`shipping`. `auth` depende dela pra verificação de e-mail e

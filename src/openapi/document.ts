@@ -53,6 +53,11 @@ const TAGS: readonly { name: string; description: string }[] = [
     description: 'Where the payment provider reports what happened.',
   },
   { name: 'shipping', description: 'Freight quoting.' },
+  {
+    name: 'reports',
+    description:
+      'Read-only aggregates for a back office: what sold, what it earned, what is sitting in carts, and what is not moving. Every route is gated on `reports.read`.',
+  },
 ];
 
 const DESCRIPTION = `

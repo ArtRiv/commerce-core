@@ -19,11 +19,12 @@ import { CartController } from '../orders/cart.controller';
 import { OrdersController } from '../orders/orders.controller';
 import { PaymentWebhookController } from '../orders/payment-webhook.controller';
 import { ShippingQuoteController } from '../orders/shipping-quote.controller';
+import { ReportsController } from '../reports/reports.controller';
 import { buildOpenApiDocument } from './document';
 
 /**
  * Every controller in the application. The route count below is what keeps
- * this list honest: add a ninth controller without listing it here and the
+ * this list honest: add a tenth controller without listing it here and the
  * totals stop matching, which fails with a message naming the gap rather than
  * quietly checking seven eighths of the API.
  */
@@ -36,6 +37,7 @@ const CONTROLLERS = [
   OrdersController,
   PaymentWebhookController,
   ShippingQuoteController,
+  ReportsController,
 ];
 
 /**
@@ -47,8 +49,11 @@ const CONTROLLERS = [
  *
  * 42 since variant management: renaming, reordering and removing a variant
  * (docs/specs/variant-management.md).
+ *
+ * 46 since reports: the four questions a back office asks, and the ninth
+ * controller (docs/specs/reports.md).
  */
-const EXPECTED_ROUTE_COUNT = 42;
+const EXPECTED_ROUTE_COUNT = 46;
 
 const HTTP_METHOD = new Map<RequestMethod, string>([
   [RequestMethod.GET, 'get'],

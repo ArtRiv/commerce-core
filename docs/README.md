@@ -38,6 +38,9 @@ convenções combinadas para trabalhar com o Claude Code neste repo.
   fazer numa migration nova e o que muda no dia em que houver uma segunda
   instância. O _porquê_ de cada escolha está em
   [`specs/deploy.md`](specs/deploy.md).
+- [`admin-api.md`](admin-api.md) — o levantamento do que um **painel
+  administrativo** precisa: o que a API já dá, o que falta, e se a fundação
+  aguenta. Cada fatia aprovada dali vira uma spec em `specs/`.
 - [`known-issues.md`](known-issues.md) — bugs e lacunas encontrados
   depois que um módulo já foi entregue, aceitos por ora mas não
   esquecidos. Não é backlog de feature (isso mora nas "decisões
