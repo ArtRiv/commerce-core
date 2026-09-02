@@ -77,6 +77,13 @@ flowchart LR
   domínio. O custo aceito é que essas consultas precisam ser mantidas junto
   com o schema.
 
+- **A gestão de equipe é rota do `auth`**, e não de um módulo `staff` novo.
+  `users`, `roles`, `role_permissions` e `user_permissions` são tabelas do
+  `auth`; um módulo próprio precisaria lê-las **e escrevê-las** de fora, o que
+  seria uma segunda exceção à regra de fronteira — e, ao contrário da do
+  `reports`, uma exceção com escrita atrás. Hospedar no `auth` não acrescenta
+  seta nenhuma a este diagrama, que é o teste de que a escolha está certa.
+  Ver [`../specs/staff-management.md`](../specs/staff-management.md).
 - `auth` não depende de nenhum módulo de domínio. Os outros módulos
   usam `auth` só através de decorators (`@Public()`,
   `@RequirePermissions(...)`, `@CurrentUser()`) e do

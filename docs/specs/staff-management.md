@@ -2,7 +2,35 @@
 
 ## Status
 
-`in-progress`
+`implementado`
+
+**575 testes unitários** (30 novos) e **36 e2e num arquivo próprio**, com
+`lint:check`, `typecheck` e `build` limpos e o `openapi.json` regerado —
+**50 operações** em 42 caminhos, quatro a mais, num décimo controller.
+
+A divisão entre as duas suítes segue a regra da casa, e aqui ela é
+especialmente nítida. Os unitários provam as **recusas** e o que é ligado à
+consulta que tranca: que a contagem de portadores chega ao banco com
+`staff.manage`, olhando `role_permissions` **e** `user_permissions`, com
+`FOR UPDATE` e `ORDER BY`. É uma afirmação sobre a construção da query, e mock
+nenhum a esconde.
+
+O que só um Postgres de verdade e uma cadeia de guardas de verdade falsificam
+são três coisas: que uma permissão concedida chega à guarda na **requisição
+seguinte**, com o token que a conta já tinha — e que revogar fecha do mesmo
+jeito; que a guarda do último administrador conta **portadores** e não papéis
+(as duas provas rodam com **zero** contas no papel `admin`, e uma permite
+enquanto a outra recusa); e o recorte da listagem, que é uma cláusula `where` e
+precisa de linhas existindo para significar alguma coisa.
+
+Papéis e concessões são escritos direto no banco em dois testes, e só onde a
+API **deliberadamente não alcança**: montar uma loja sem nenhuma conta `admin`
+não é operação que ela ofereça, e é exatamente o estado para o qual a guarda
+existe.
+
+A migration foi provada contra um banco que **não tinha** a permissão: apagados
+a linha e o vínculo, ela os recria, é idempotente rodando duas vezes, e não
+encosta no `operator`.
 
 ## Objetivo
 

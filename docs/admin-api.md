@@ -23,7 +23,7 @@ Nada aqui é spec. Cada fatia que for aprovada vira uma spec em
 | Pedidos | **completo** |
 | Clientes | **não existe** — a permissão existe, a rota não |
 | Relatórios | **completo** para as quatro perguntas que o painel fez |
-| Acesso (promover usuário, conceder permissão) | **não existe** em rota; o schema já prevê |
+| Acesso (promover usuário, conceder permissão) | **completo** — quatro rotas atrás de `staff.manage` |
 
 ## Já existe — não reconstrua
 
@@ -140,28 +140,47 @@ cai na semana seguinte).
 período e quebra por tamanho ficaram de fora de propósito, registrados nas
 decisões adiadas da spec.
 
-### 4. Acesso: promover usuário e conceder permissão
+### 4. Acesso: ~~promover usuário e conceder permissão~~ **feito**
 
-Hoje promover alguém a `admin` é um `UPDATE` no banco, e o runbook de loja
-nova documenta isso. O schema, porém, já previu a versão em rota:
-`UserPermission` tem `grantedById` e `grantedAt` — **a proveniência de uma
-concessão foi desenhada e nunca exposta**.
+Entregue em [`specs/staff-management.md`](specs/staff-management.md).
+`GET /staff` (lista a equipe, e acha qualquer conta por e-mail exato),
+`PATCH /staff/{userId}/role`, `POST /staff/{userId}/permissions` e
+`DELETE /staff/{userId}/permissions/{permission}`, todas atrás de
+`staff.manage` — a décima quinta permissão do catálogo, que vai só para
+`admin` e que **chega a quem já é admin por migration**, senão a feature
+nasceria inacessível em produção.
 
-Esta é a rota mais perigosa do sistema inteiro e merece a spec mais cuidadosa.
-Três regras que ela não pode não ter:
+`grantedById` e `grantedAt` deixaram de ser colunas desenhadas e nunca lidas:
+toda concessão sai da API assinada e datada.
 
-1. **Uma permissão própria para conceder permissão.** Hoje `admin` é
-   literalmente "todas as permissões do catálogo", então não existe nada que
-   `admin` tenha e `operator` não tenha *por natureza* — só pela lista. Uma
-   rota de concessão precisa de algo como `users.grant`, que entra no catálogo
-   e vai só para `admin`.
-2. **Recusar conceder a si mesmo.** Sem isso, qualquer conta que alcance a
-   rota se promove.
-3. **Recusar conceder o que o chamador não tem.** Um `operator` comprometido
-   não pode passar a distribuir `orders.refund` se ele próprio não o tem.
+Das três regras que este documento exigia, **duas entraram como escritas** e a
+terceira não sobreviveu ao próprio raciocínio:
 
-Sem as três, uma conta de operador comprometida vira administrador. Com elas,
-o estrago para na permissão que o atacante já tinha.
+1. **Permissão própria para conceder permissão** — é `staff.manage`, e ela é
+   *concedível*, não "quem é admin". Decisão do dono: a delegação tem que ser
+   delegável, porque ele quer um sub-chefe fazendo esse trabalho.
+2. **Recusar conceder a si mesmo** — entrou, e cresceu: também não se troca o
+   próprio papel. O que **é** permitido é revogar a própria concessão avulsa,
+   porque renunciar nunca é escalada — e porque é o único caminho que alcança a
+   guarda do último administrador, que de outro modo seria intestável.
+3. ~~**Recusar conceder o que o chamador não tem**~~ — **não entrou, de
+   propósito.** Ela não fecha nada enquanto existir troca de papel: quem pode
+   pôr uma conta em `admin` concede o catálogo inteiro sem passar pela rota de
+   concessão. Fechar de verdade exigiria restringir também os papéis
+   atribuíveis a um subconjunto do que o chamador tem — o que tira do sub-chefe
+   exatamente a capacidade pela qual ele existe. Então a escolha foi **escrever
+   a consequência em vez de fingir contê-la**: conceder `staff.manage` é
+   conceder tudo, e está dito assim na spec, no catálogo de permissões e na
+   descrição da rota no OpenAPI.
+
+O que sobrou limitando o estrago: ninguém aumenta o próprio acesso, toda
+concessão fica assinada, e a loja não pode ficar sem quem administre — uma
+guarda que conta **portadores efetivos** de `staff.manage` (papel ∪ avulsas),
+porque um `operator` com a concessão administra tanto quanto um `admin`.
+
+**O que continua fora**: ciclo de vida de conta (suspender/demitir), convite
+por e-mail, e trilha de auditoria da troca de papel — que é o item 6 abaixo e
+continua valendo inteiro.
 
 ### 5. Imagens de produto
 
@@ -232,10 +251,14 @@ alguém achar que estão resolvidas.
    Uma spec, e a política de remoção é o coração dela.
 2. **Clientes: listar e ver.** Pequena, e o cuidado inteiro está no DTO de
    resposta.
-3. **Acesso: conceder e revogar permissão.** A spec mais cuidadosa das três.
-   Depois das duas acima, porque o painel é útil sem ela e perigoso se feita
-   com pressa.
-4. **Auditoria**, quando existir a segunda pessoa com acesso.
+3. ~~**Acesso: conceder e revogar permissão.**~~ **Feito** — também fora de
+   ordem, e pelo mesmo tipo de gatilho concreto: `operator` lê o catálogo e não
+   pode cadastrar peça, então a pessoa contratada para cadastrar não é nenhum
+   dos três papéis. Ver o item 4. Continuou sendo a spec mais cuidadosa das
+   três: metade dela é sobre o que a rota **recusa**.
+4. **Auditoria**, quando existir a segunda pessoa com acesso — e agora existe
+   um caminho por API para criar essa segunda pessoa, o que aproxima o item em
+   vez de afastá-lo. A troca de papel é a escrita que não deixa rastro nenhum.
 5. ~~**Relatórios**, por último, ou nunca.~~ **Feito** — fora de ordem, porque
    o painel já existia e já perguntava. Ver o item 3.
 

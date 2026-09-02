@@ -39,7 +39,7 @@ critério de sucesso (deploy real).
 
 | Módulo | O que faz | Spec |
 | --- | --- | --- |
-| `auth` | Registro, verificação de e-mail, login (senha e Google), refresh rotativo de uso único, reset de senha, RBAC por permissão | [auth](specs/auth.md) |
+| `auth` | Registro, verificação de e-mail, login (senha e Google), refresh rotativo de uso único, reset de senha, RBAC por permissão, e a **gestão de equipe** (`/staff`: papel, concessão e revogação) | [auth](specs/auth.md), [staff-management](specs/staff-management.md) |
 | `catalog` | Produtos, categorias, **variantes** (tamanho) com estoque próprio, ciclo `DRAFT → ACTIVE → ARCHIVED` | [catalog](specs/catalog.md), [product-variants](specs/product-variants.md) |
 | `orders` | Carrinho **por variante** com totais prontos, checkout, ciclo `CREATED → PAID → SHIPPED → DELIVERED` mais `CANCELLED`/`REFUNDED` | [orders](specs/orders.md), [cart-totals](specs/cart-totals.md) |
 | `payments` | Stripe atrás de `PaymentProvider`: Checkout Session (hosted/embedded), webhook assinado, reembolso | [payments](specs/payments.md) |
@@ -48,8 +48,8 @@ critério de sucesso (deploy real).
 | `reports` | As quatro perguntas de um back-office: unidades por peça, receita por semana/mês, o que está parado em carrinho, e o que não vende. Só leitura, agregado no banco | [reports](specs/reports.md) |
 | `openapi` | Documento gerado dos decorators, commitado e conferido pelo CI | [openapi](specs/openapi.md) |
 
-Números: **46 rotas** em 9 controllers, **545 testes unitários**,
-**258 e2e**, 11 migrations.
+Números: **50 rotas** em 10 controllers, **575 testes unitários**,
+**294 e2e**, 12 migrations.
 
 ### Autorização
 
@@ -59,12 +59,19 @@ a **permissão**, nunca a role, então redefinir o que `admin` significa não
 mexe em nenhuma rota. Catálogo em `src/auth/authz/permissions.ts`:
 
 `products.read|create|update|delete`, `orders.read|update_status|cancel|refund`,
-`customers.read`, `coupons.read|create|update|delete`, `reports.read`.
+`customers.read`, `coupons.read|create|update|delete`, `reports.read`,
+`staff.manage`.
 
 As de `coupons` existem no catálogo e **não têm feature atrás** — reservadas
 de propósito. `customers.read` está na mesma situação; `reports.read` deixou de
-estar ([`specs/reports.md`](specs/reports.md)). O que falta para um painel
-completo está levantado em [`admin-api.md`](admin-api.md).
+estar ([`specs/reports.md`](specs/reports.md)).
+
+`staff.manage` é a mais nova e a única que distribui as outras: quem a tem
+troca papel e concede permissão avulsa pela API, e portanto pode pôr uma conta
+em `admin` — **conceder `staff.manage` é conceder tudo**, escrito assim de
+propósito ([`specs/staff-management.md`](specs/staff-management.md)). Só o
+`admin` a recebe de fábrica. O que falta para um painel completo está levantado
+em [`admin-api.md`](admin-api.md).
 
 ## Fora do escopo da v1, de propósito
 
