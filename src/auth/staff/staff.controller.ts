@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseEnumPipe,
   Patch,
@@ -102,6 +103,10 @@ export class StaffController {
 
   @RequirePermissions(PERMISSIONS.STAFF_MANAGE)
   @Post(':userId/permissions')
+  // 200, not Nest's default 201: the response is the account, which already
+  // existed, and granting the same permission twice creates nothing at all.
+  // Same reading as the order transitions, which POST and answer 200.
+  @HttpCode(200)
   @ApiOperation({
     summary: 'Grant a permission to an account',
     description: `One permission on top of the role — the way an \`operator\` hired to catalogue pieces gets \`products.create\` without becoming an \`admin\`.\n\n**You cannot grant to yourself.** That refusal is the reason this route cannot be used to promote the account that is calling it.\n\n**Granting \`staff.manage\` is granting everything.** Not in one step, but in two nobody can prevent: whoever manages access can move an account to \`admin\`, and \`admin\` is the whole catalogue. Delegate it to somebody you would have made an admin.\n\nGranting the same permission twice is a no-op and answers 200; the original \`grantedAt\` and \`grantedById\` stay, because the first grant is the record. Granting one the role already carries is allowed — the grant survives a later role change.\n\n${IMMEDIATE}`,

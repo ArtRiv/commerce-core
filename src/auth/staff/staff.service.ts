@@ -105,8 +105,14 @@ const SELF_ROLE =
 const LAST_HOLDER =
   'Refused: this would remove the last account able to manage access. Nobody could grant staff.manage to anybody afterwards, and the store would be back to editing the database by hand. Give staff.manage to another account first.';
 
-function roleGrantMessage(permission: string): string {
-  return `This account has no direct grant of ${permission}. It holds it through its role, which is removed by changing the role rather than by revoking a grant.`;
+/**
+ * One message for both shapes of the miss — the account never had the grant,
+ * or it holds the permission through its role — because from the caller's side
+ * they are the same fact ("there is no grant here to remove") and the useful
+ * half is the same too: a role's permissions do not come off one at a time.
+ */
+function noSuchGrantMessage(permission: string): string {
+  return `This account has no direct grant of ${permission}. If it holds that permission through its role, change the role instead — a role's permissions are not revoked one by one.`;
 }
 
 /**
@@ -276,7 +282,7 @@ export class StaffService {
       );
 
       if (!granted.includes(permission)) {
-        throw new NotFoundException(roleGrantMessage(permission));
+        throw new NotFoundException(noSuchGrantMessage(permission));
       }
 
       assertStoreKeepsAnAdministrator(
