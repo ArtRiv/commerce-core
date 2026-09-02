@@ -32,21 +32,76 @@ Arquitetura (diagramas Mermaid) e o workflow de spec + TDD ficam em [`docs/`](do
 
 ## Rodando o projeto
 
+Precisa de **Node >= 22.18 < 23**, **pnpm 10** e um **PostgreSQL** — local,
+Docker ou um projeto Supabase novo. Do zero até a API no ar:
+
 ```bash
+# 1. dependências
 pnpm install
+
+# 2. configuração — o .env.example documenta cada variável e por que ela existe
+cp .env.example .env
 ```
 
-```bash
-# desenvolvimento (watch mode)
-pnpm run start:dev
+Em `development` só duas variáveis são obrigatórias para subir:
 
+| variável | o que é |
+| --- | --- |
+| `DATABASE_URL` | string de conexão do Postgres |
+| `JWT_SECRET` | qualquer string longa e aleatória |
+
+As de Stripe, Resend, frete e proxy podem ficar como estão no exemplo, e as
+duas do Google podem ficar vazias — sem elas o login social simplesmente não é
+oferecido, e `GET /auth/google` responde 503 em vez de quebrar o boot. **Fora
+de `development`/`test` isso muda**: o app se recusa a subir sem chaves reais
+de Stripe, sem tabela de frete e sem `TRUST_PROXY_HOPS` — três guardas que
+falham no boot com código 1 em vez de degradar em silêncio.
+
+```bash
+# 3. esquema do banco
+pnpm exec prisma migrate deploy
+
+# 4. dados de referência — catálogo de permissões e os três papéis padrão.
+#    Sem isto não existe papel para um usuário novo receber, e o registro falha.
+pnpm exec prisma db seed
+
+# 5. opcional: um catálogo de demonstração, para a API responder com algo
+pnpm demo:catalog
+
+# 6. sobe em watch mode na :3000
+pnpm start:dev
+```
+
+Com o app de pé, **<http://localhost:3000/docs>** é a Swagger UI navegável.
+Crie a primeira conta em `POST /auth/register`.
+
+Duas coisas que o cadastro não dá, **de propósito**, e que hoje só se resolvem
+no banco:
+
+```sql
+-- verificar o e-mail sem esperar a mensagem (precisa de RESEND_API_KEY real)
+update users set email_verified_at = now(), updated_at = now()
+where email = 'voce@exemplo.com';
+
+-- promover a conta a admin
+update users set role_id = (select id from roles where name = 'admin'),
+  updated_at = now()
+where email = 'voce@exemplo.com';
+```
+
+Não existe rota para nenhuma das duas — nem aqui nem em lugar nenhum da API.
+Verificação por rota seria um bypass do e-mail, e gestão de papéis é uma lacuna
+conhecida: ver [Limitações](#limitações).
+
+```bash
 # produção
-pnpm run start:prod
+pnpm build
+pnpm start:prod
 ```
 
 ## Documentação da API
 
-Com o app no ar, a spec OpenAPI 3 completa das 39 rotas fica em:
+Com o app no ar, a spec OpenAPI 3 completa — 38 caminhos, 46 operações — fica em:
 
 - **`/docs`** — Swagger UI, navegável, com "Authorize" pro bearer token
 - **`/docs-json`** — o documento cru
@@ -86,9 +141,32 @@ variáveis estão documentadas em [`.env.example`](.env.example).
 # unitários
 pnpm run test
 
-# e2e
+# e2e — precisa de um banco descartável, NÃO o de desenvolvimento
+pnpm run e2e:setup    # reconstrói o schema `e2e` do zero
 pnpm run test:e2e
 
 # cobertura
 pnpm run test:cov
 ```
+
+A suíte e2e dá `TRUNCATE` nas tabelas do banco para onde o `DATABASE_URL`
+aponta. Ela roda contra um **schema separado** (`e2e`), configurado por
+`E2E_DATABASE_URL` — ver `.env.example`. Rodar com o `DATABASE_URL` de
+desenvolvimento apagaria o catálogo.
+
+## Limitações
+
+O que a v1 deliberadamente **não** tem, para não haver surpresa ao integrar:
+
+- **Não há rota de gestão de acesso.** O modelo de autorização existe e é
+  aplicado: 14 permissões no catálogo, três papéis padrão, uma tabela
+  `user_permissions` para concessão avulsa por cima do papel, e o
+  `jwt.strategy` somando papel + avulsas em toda requisição autenticada. O que
+  não existe é endpoint — nenhuma das 38 rotas lista usuário, troca papel ou
+  concede permissão. Hoje isso é `UPDATE` no banco, como no passo 6 acima.
+- **Não há ciclo de vida de conta**: suspender, arquivar ou excluir um usuário.
+- **Não há `/auth/me`.** Nenhuma rota descreve o chamador, e o access token
+  carrega só `{ sub }` — um front-end que queira mostrar o nome de quem está
+  logado precisa guardá-lo por conta própria no login.
+- **Cupons são permissão sem feature**: as quatro permissões `coupons.*`
+  existem no catálogo e nenhuma rota as usa ainda.

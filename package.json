@@ -4,7 +4,7 @@
   "description": "Backend headless de e-commerce, modular, com Auth, catálogo, pedidos e pagamentos.",
   "author": "Artriv",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "packageManager": "pnpm@10.14.0",
   "engines": {
     "node": ">=22.18.0 <23"
