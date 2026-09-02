@@ -58,6 +58,11 @@ const TAGS: readonly { name: string; description: string }[] = [
     description:
       'Read-only aggregates for a back office: what sold, what it earned, what is sitting in carts, and what is not moving. Every route is gated on `reports.read`.',
   },
+  {
+    name: 'staff',
+    description:
+      'Who works here: list the team, change a role, grant and revoke a per-user permission. Every route is gated on `staff.manage`, which is itself grantable — and granting it is granting everything, two steps out.',
+  },
 ];
 
 const DESCRIPTION = `
@@ -86,7 +91,14 @@ changes. Each gated route names its permission in the description of its
 Out of the box: \`customer\` holds none, \`operator\` holds
 \`products.read\`, \`orders.read\`, \`orders.update_status\`,
 \`customers.read\`, \`coupons.read\` and \`reports.read\`, and \`admin\`
-holds every permission — including \`orders.refund\`, which nothing else does.
+holds every permission — including \`orders.refund\` and \`staff.manage\`,
+which nothing else does.
+
+Those defaults are a starting point, not a ceiling: \`/staff\` grants a
+permission to one account on top of its role, so the person hired to
+catalogue pieces gets \`products.create\` without becoming an admin. Be
+deliberate with \`staff.manage\` itself — whoever holds it can move an
+account to \`admin\`, so granting it is granting everything.
 
 ### Errors
 

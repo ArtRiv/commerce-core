@@ -13,6 +13,7 @@ import { MAIL_SERVICE, type MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { LoginDto } from './dto/login.dto';
 import type { RegisterDto } from './dto/register.dto';
+import { normalizeEmail } from './normalize-email';
 import { PasswordService } from './password.service';
 import { RefreshTokenService } from './refresh-token.service';
 import type { TokenPair } from './token-pair';
@@ -30,16 +31,6 @@ export interface GoogleProfile {
   name: string | null;
   /** Google's own `email_verified`. Load-bearing — see `loginWithGoogle`. */
   emailVerified: boolean;
-}
-
-/**
- * Addresses are matched case-insensitively. Postgres unique indexes are not,
- * so without this "Ada@example.com" and "ada@example.com" would be two accounts
- * for one mailbox — and Google, which hands back a lowercased address, would
- * fail to auto-link to a mixed-case row when that lands.
- */
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
 }
 
 @Injectable()

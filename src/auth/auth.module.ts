@@ -11,6 +11,8 @@ import { PermissionsGuard } from './authz/permissions.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { PasswordService } from './password.service';
 import { RefreshTokenService } from './refresh-token.service';
+import { StaffController } from './staff/staff.controller';
+import { StaffService } from './staff/staff.service';
 import {
   GoogleStrategy,
   isGoogleConfigured,
@@ -62,9 +64,15 @@ const DEFAULT_ACCESS_TOKEN_TTL = '15m';
       }),
     }),
   ],
-  controllers: [AuthController],
+  // StaffController is auth's because the tables behind it are auth's: users,
+  // roles, role_permissions and user_permissions. A module of its own would
+  // have to read and WRITE them from outside, which is a boundary crossing
+  // this repo has allowed exactly once, for a read-only leaf
+  // (docs/architecture/modules.md).
+  controllers: [AuthController, StaffController],
   providers: [
     AuthService,
+    StaffService,
     PasswordService,
     RefreshTokenService,
     VerificationTokenService,
