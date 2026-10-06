@@ -36,6 +36,37 @@ export class ProductVariantResponse {
     example: 4,
   })
   stockQuantity: number;
+
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: 'Height in centimetres for cubic freight quoting.',
+    example: 10,
+  })
+  heightCm: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: 'Width in centimetres for cubic freight quoting.',
+    example: 15,
+  })
+  widthCm: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: 'Length in centimetres for cubic freight quoting.',
+    example: 20,
+  })
+  lengthCm: number | null;
+
+  @ApiProperty({
+    description:
+      'Whether this size has been archived and removed from the active storefront.',
+    example: false,
+  })
+  isArchived: boolean;
 }
 
 export class ProductResponse {

@@ -55,4 +55,34 @@ export class CreateVariantDto {
   @IsInt()
   @Min(0)
   stockQuantity?: number;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    description: 'Height in centimetres for cubic freight quoting.',
+    example: 10,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  heightCm?: number;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    description: 'Width in centimetres for cubic freight quoting.',
+    example: 15,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  widthCm?: number;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    description: 'Length in centimetres for cubic freight quoting.',
+    example: 20,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  lengthCm?: number;
 }
