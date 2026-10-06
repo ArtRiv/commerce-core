@@ -28,7 +28,7 @@ describe('EncryptionService', () => {
 
     const service = new EncryptionService(config);
     const credentials = {
-      access_token: 'APP_USR-99999',
+      access_token: 'mock-token-99999',
       refresh_token: 'TG-11111',
       expires_in: 21600,
     };

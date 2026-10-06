@@ -33,8 +33,8 @@ describe('MercadoLivreConnector', () => {
   it('retorna access_token existente se ainda estiver válido e distante da expiração', async () => {
     const validUntil = new Date(Date.now() + 60 * 60 * 1000); // 1 hora no futuro
     const credentials = {
-      access_token: 'APP_USR-token-valido',
-      refresh_token: 'TG-refresh-1',
+      access_token: 'mock-valid-token',
+      refresh_token: 'mock-refresh-1',
     };
 
     mockPrisma.tenantIntegration.findUnique.mockResolvedValue({
@@ -47,15 +47,15 @@ describe('MercadoLivreConnector', () => {
     });
 
     const token = await connector.getValidAccessToken('default');
-    expect(token).toBe('APP_USR-token-valido');
+    expect(token).toBe('mock-valid-token');
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('executa lock e rotação segura de refresh token quando o token está expirando', async () => {
     const expiredDate = new Date(Date.now() - 1000); // Expirado
     const oldCredentials = {
-      access_token: 'APP_USR-antigo',
-      refresh_token: 'TG-refresh-antigo',
+      access_token: 'mock-old-token',
+      refresh_token: 'mock-refresh-antigo',
     };
 
     mockPrisma.tenantIntegration.findUnique.mockResolvedValue({
@@ -85,8 +85,8 @@ describe('MercadoLivreConnector', () => {
   it('reutiliza token atualizado caso outra requisição concorrente já tenha renovado durante o lock', async () => {
     const expiredDate = new Date(Date.now() - 1000);
     const oldCredentials = {
-      access_token: 'APP_USR-antigo',
-      refresh_token: 'TG-refresh-antigo',
+      access_token: 'mock-old-token',
+      refresh_token: 'mock-refresh-antigo',
     };
 
     mockPrisma.tenantIntegration.findUnique.mockResolvedValue({
@@ -101,8 +101,8 @@ describe('MercadoLivreConnector', () => {
     // Simula que após adquirir o lock, a linha no banco já contém o token renovado por outro worker!
     const newlyRefreshedDate = new Date(Date.now() + 5 * 60 * 60 * 1000);
     const newlyRefreshedCredentials = {
-      access_token: 'APP_USR-renovado-pelo-worker-1',
-      refresh_token: 'TG-refresh-novo',
+      access_token: 'mock-token-worker-1',
+      refresh_token: 'mock-refresh-novo',
     };
 
     mockPrisma.$queryRaw.mockResolvedValue([
@@ -120,7 +120,7 @@ describe('MercadoLivreConnector', () => {
 
     const token = await connector.getValidAccessToken('default');
 
-    expect(token).toBe('APP_USR-renovado-pelo-worker-1');
+    expect(token).toBe('mock-token-worker-1');
     // Não deve disparar nova rotação externa contra o Mercado Livre!
     expect(spyRotation).not.toHaveBeenCalled();
   });
@@ -134,8 +134,8 @@ describe('MercadoLivreConnector', () => {
       status: 'ACTIVE',
       expiresAt: validUntil,
       credentialsEncrypted: encryption.encryptJson({
-        access_token: 'APP_USR-token',
-        refresh_token: 'TG-token',
+        access_token: 'mock-token',
+        refresh_token: 'mock-refresh',
       }),
     });
 
@@ -154,8 +154,8 @@ describe('MercadoLivreConnector', () => {
       status: 'ACTIVE',
       expiresAt: validUntil,
       credentialsEncrypted: encryption.encryptJson({
-        access_token: 'APP_USR-token',
-        refresh_token: 'TG-token',
+        access_token: 'mock-token',
+        refresh_token: 'mock-refresh',
       }),
     });
 
