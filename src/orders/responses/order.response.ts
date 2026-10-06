@@ -1,9 +1,11 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 import { OrderStatus } from '../../generated/prisma/enums';
 import {
   CHECKOUT_MODES,
   type CheckoutMode,
+  PAYMENT_METHODS,
+  type PaymentMethod,
 } from '../../payments/payment-provider';
 
 /**
@@ -50,6 +52,31 @@ export class OrderItemResponse {
 }
 
 /**
+ * PIX payment credentials returned in the payment session.
+ * Both payload (Copia e Cola) and encodedImage (base64 QR PNG) are included
+ * so the order page can render the QR Code without a second round-trip.
+ */
+export class PixSessionResponse {
+  @ApiProperty({
+    description:
+      'The EMV-standard Copia e Cola text string the buyer pastes into their bank app.',
+    example: '00020126360014BR.GOV.BCB.PIX...',
+  })
+  payload: string;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description:
+      'Base64-encoded PNG of the dynamic QR Code, ready for <img src="...">. Null when the provider did not return one yet.',
+  })
+  encodedImage: string | null;
+
+  @ApiProperty({ type: String, format: 'date-time' })
+  expirationDate: Date;
+}
+
+/**
  * How to actually pay an order. Transient — assembled per request, never a
  * database row, which is what lets `clientSecret` exist without ever being
  * stored.
@@ -81,6 +108,14 @@ export class PaymentSessionResponse {
 
   @ApiProperty({ type: String, format: 'date-time' })
   expiresAt: Date;
+
+  @ApiPropertyOptional({
+    type: PixSessionResponse,
+    nullable: true,
+    description:
+      'PIX credentials — only present when the payment method is PIX. Contains the QR Code image and the Copia e Cola EMV payload.',
+  })
+  pix?: PixSessionResponse | null;
 }
 
 /**
@@ -159,6 +194,18 @@ export class OrderResponse {
   @ApiProperty({ nullable: true, type: String, example: 'Apto 42' })
   shippingLine2: string | null;
 
+  @ApiProperty({ nullable: true, type: String, example: 'Rua das Flores' })
+  shippingStreet: string | null;
+
+  @ApiProperty({ nullable: true, type: String, example: '100' })
+  shippingNumber: string | null;
+
+  @ApiProperty({ nullable: true, type: String, example: 'Apto 42' })
+  shippingComplement: string | null;
+
+  @ApiProperty({ nullable: true, type: String, example: 'Centro' })
+  shippingNeighborhood: string | null;
+
   @ApiProperty({ example: 'Curitiba' })
   shippingCity: string;
 
@@ -193,6 +240,38 @@ export class OrderResponse {
 
   @ApiProperty({ nullable: true, type: String })
   trackingUrl: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description: 'Reference ID of the order in Bling ERP for NF-e emission.',
+    example: '12345678',
+  })
+  blingOrderId: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    format: 'date-time',
+    description: 'When the order was successfully exported to Bling ERP.',
+  })
+  blingExportedAt: Date | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description: 'Temporary download URL for the carrier shipping label PDF.',
+    example: 'https://melhorenvio.com.br/labels/shipment-123.pdf',
+  })
+  labelUrl: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    format: 'date-time',
+    description: 'When the shipping label was purchased from the carrier.',
+  })
+  labelPurchasedAt: Date | null;
 
   @ApiProperty({
     nullable: true,
@@ -235,6 +314,33 @@ export class OrderResponse {
   @ApiProperty({ nullable: true, type: String, format: 'date-time' })
   refundedAt: Date | null;
 
+  @ApiPropertyOptional({
+    enum: PAYMENT_METHODS,
+    nullable: true,
+    type: String,
+    description:
+      'Which gateway processed this order. PIX=Asaas, CREDIT_CARD=MercadoPago, STRIPE=Stripe. Null for legacy orders.',
+    example: 'PIX',
+  })
+  paymentMethod: PaymentMethod | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description:
+      'The EMV-standard Copia e Cola string for PIX payments. Present on PIX orders — the order page renders this so the buyer can copy-paste into their bank app.',
+    example: '00020126360014BR.GOV.BCB.PIX...',
+  })
+  pixPayload: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    description:
+      'Base64-encoded PNG of the dynamic PIX QR Code. Present on PIX orders when the provider returned an image. Render with <img src="data:image/png;base64,..." />.',
+  })
+  pixQrCode: string | null;
+
   @ApiProperty({ nullable: true, type: String, format: 'date-time' })
   paidAt: Date | null;
 
@@ -270,6 +376,29 @@ export class OrderWithPaymentResponse extends OrderResponse {
   payment: PaymentSessionResponse | null;
 }
 
+export class OrderStatusCountsResponse {
+  @ApiProperty({ example: 10 })
+  all: number;
+
+  @ApiProperty({ example: 4 })
+  CREATED: number;
+
+  @ApiProperty({ example: 3 })
+  PAID: number;
+
+  @ApiProperty({ example: 2 })
+  SHIPPED: number;
+
+  @ApiProperty({ example: 1 })
+  DELIVERED: number;
+
+  @ApiProperty({ example: 0 })
+  CANCELLED: number;
+
+  @ApiProperty({ example: 0 })
+  REFUNDED: number;
+}
+
 export class PaginatedOrdersResponse {
   @ApiProperty({ type: [OrderResponse] })
   items: OrderResponse[];
@@ -282,4 +411,10 @@ export class PaginatedOrdersResponse {
 
   @ApiProperty({ description: 'Clamped to 100.', example: 20 })
   perPage: number;
+
+  @ApiProperty({
+    type: OrderStatusCountsResponse,
+    description: 'Counts broken down by status for the current scope.',
+  })
+  statusCounts: OrderStatusCountsResponse;
 }

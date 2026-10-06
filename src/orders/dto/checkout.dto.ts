@@ -16,6 +16,8 @@ import {
 import {
   CHECKOUT_MODES,
   type CheckoutMode,
+  PAYMENT_METHODS,
+  type PaymentMethod,
 } from '../../payments/payment-provider';
 import { POSTAL_CODE_PATTERN } from '../../shipping/shipping-table';
 
@@ -28,17 +30,46 @@ import { POSTAL_CODE_PATTERN } from '../../shipping/shipping-table';
  * denormalized snapshot.
  */
 export class ShippingAddressDto {
-  @ApiProperty({ maxLength: 200, example: 'Rua das Flores, 100' })
+  @ApiPropertyOptional({
+    maxLength: 200,
+    example: 'Rua das Flores, 100',
+    description:
+      'Full address line. Optional if street and number are provided.',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(200)
-  line1: string;
+  line1?: string;
 
   @ApiPropertyOptional({ maxLength: 200, example: 'Apto 42' })
   @IsOptional()
   @IsString()
   @MaxLength(200)
   line2?: string;
+
+  @ApiPropertyOptional({ maxLength: 150, example: 'Rua das Flores' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  street?: string;
+
+  @ApiPropertyOptional({ maxLength: 20, example: '100' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  number?: string;
+
+  @ApiPropertyOptional({ maxLength: 100, example: 'Apto 42' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  complement?: string;
+
+  @ApiPropertyOptional({ maxLength: 100, example: 'Centro' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  neighborhood?: string;
 
   @ApiProperty({ maxLength: 100, example: 'Curitiba' })
   @IsString()
@@ -88,6 +119,21 @@ export class CheckoutDto {
   @IsOptional()
   @IsIn(CHECKOUT_MODES)
   paymentMode?: CheckoutMode;
+
+  /**
+   * Which payment method the buyer selected. The hybrid payment router uses
+   * this to pick the appropriate gateway (PIX → Asaas, CREDIT_CARD → Mercado
+   * Pago, STRIPE → Stripe). Defaults to STRIPE for backward compatibility.
+   */
+  @ApiPropertyOptional({
+    enum: PAYMENT_METHODS,
+    description:
+      'Which payment method the buyer selected. PIX routes to Asaas, CREDIT_CARD to Mercado Pago, STRIPE to Stripe/fallback.',
+    example: 'PIX',
+  })
+  @IsOptional()
+  @IsIn(PAYMENT_METHODS)
+  paymentMethod?: PaymentMethod;
 
   /** The `code` of an option returned by POST /shipping/quote. */
   @ApiProperty({
