@@ -31,6 +31,32 @@ export class RevenueBucketResponse {
   orderCount: number;
 }
 
+export class RevenueTotalsResponse {
+  @ApiProperty({
+    description: 'Total revenue in cents for the entire period.',
+    example: 59920,
+  })
+  revenueCents: number;
+
+  @ApiProperty({
+    description: 'Total goods subtotal in cents for the entire period.',
+    example: 55930,
+  })
+  itemsSubtotalCents: number;
+
+  @ApiProperty({
+    description: 'Total shipping in cents for the entire period.',
+    example: 3990,
+  })
+  shippingCents: number;
+
+  @ApiProperty({
+    description: 'Total paid orders in the entire period.',
+    example: 4,
+  })
+  orderCount: number;
+}
+
 export class RevenueReportResponse extends ReportPeriodResponse {
   @ApiProperty({ enum: REVENUE_GRANULARITIES, example: 'month' })
   granularity: string;
@@ -48,4 +74,10 @@ export class RevenueReportResponse extends ReportPeriodResponse {
       'Ascending, and **continuous**: a week or month with no sales comes back as zeros rather than as a gap, so a bar chart does not silently skip the bad week. Not paginated — a chart needs the whole series, and the window already bounds it.',
   })
   buckets: RevenueBucketResponse[];
+
+  @ApiProperty({
+    type: RevenueTotalsResponse,
+    description: 'Aggregated totals across the entire period.',
+  })
+  totals: RevenueTotalsResponse;
 }

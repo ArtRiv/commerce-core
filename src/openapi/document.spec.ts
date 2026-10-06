@@ -16,6 +16,7 @@ import { IS_PUBLIC_KEY } from '../auth/public.decorator';
 import { StaffController } from '../auth/staff/staff.controller';
 import { CategoriesController } from '../catalog/categories.controller';
 import { ProductsController } from '../catalog/products.controller';
+import { IntegrationsController } from '../integrations/integrations.controller';
 import { CartController } from '../orders/cart.controller';
 import { OrdersController } from '../orders/orders.controller';
 import { PaymentWebhookController } from '../orders/payment-webhook.controller';
@@ -40,6 +41,7 @@ const CONTROLLERS = [
   PaymentWebhookController,
   ShippingQuoteController,
   ReportsController,
+  IntegrationsController,
 ];
 
 /**
@@ -55,11 +57,17 @@ const CONTROLLERS = [
  * 46 since reports: the four questions a back office asks, and the ninth
  * controller (docs/specs/reports.md).
  *
- * 50 since staff management: listing the team, changing a role, granting and
- * revoking a permission — the tenth controller, and the first routes that can
- * change what another caller is allowed to do (docs/specs/staff-management.md).
+ * 51 since postal code (CEP) lookup: GET /shipping/cep/{postalCode}.
+ *
+ * 57 since hybrid payment webhooks: POST /payments/webhook/{asaas,mercadopago,stripe}.
+ *
+ * 59 since shipping label purchase and order quotes: GET /orders/{id}/shipping-quotes, POST /orders/{id}/label.
+ *
+ * 65 since marketplace integrations (Mercado Livre): GET /integrations, GET /integrations/mercadolivre/auth-url,
+ * POST /integrations/mercadolivre/callback, POST /integrations/mercadolivre/disconnect,
+ * POST /integrations/mercadolivre/sync, POST /integrations/mercadolivre/webhook.
  */
-const EXPECTED_ROUTE_COUNT = 50;
+const EXPECTED_ROUTE_COUNT = 65;
 
 const HTTP_METHOD = new Map<RequestMethod, string>([
   [RequestMethod.GET, 'get'],

@@ -18,7 +18,8 @@ export class IntegrationItemResponse {
   expiresAt: string | null;
 
   @ApiProperty({
-    type: Object,
+    type: 'object',
+    additionalProperties: true,
     example: { userId: 123456, nickname: 'LOJA_OFICIAL_ML' },
     nullable: true,
   })
