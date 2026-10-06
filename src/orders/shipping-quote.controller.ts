@@ -1,17 +1,29 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { Public } from '../auth/public.decorator';
 import { ClientIpThrottlerGuard } from '../common/throttling/client-ip-throttler.guard';
 import {
   ApiBadRequest,
   ApiConflict,
+  ApiNotFound,
   ApiRateLimited,
   ApiServiceUnavailable,
 } from '../openapi/api-errors.decorator';
 import { ApiAuthenticated } from '../openapi/security';
+import { CepService } from '../shipping/cep.service';
+import { CepResponse } from '../shipping/responses/cep.response';
 import { ShippingQuoteDto } from './dto/shipping-quote.dto';
 import { RATE_LIMITS } from './rate-limits';
 import { ShippingQuoteResponse } from './responses/shipping-quote.response';
@@ -27,18 +39,33 @@ const QUOTE_DESCRIPTION = [
 ].join('\n\n');
 
 /**
- * Serves /shipping/quote while living in `orders`, exactly like the payment
- * webhook serves /payments/webhook from here: the URL names the domain a
- * frontend is thinking about, and the code sits where the data it reads lives
- * — the caller's cart. See docs/architecture/modules.md.
- *
- * POST rather than GET despite being a read: the postal code is a piece of
- * personal data, and query strings end up in access logs and browser history.
+ * Serves /shipping/quote and /shipping/cep/:postalCode.
  */
 @ApiTags('shipping')
 @Controller('shipping')
 export class ShippingQuoteController {
-  constructor(private readonly quotes: ShippingQuoteService) {}
+  constructor(
+    private readonly quotes: ShippingQuoteService,
+    private readonly cepService: CepService,
+  ) {}
+
+  @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.SHIPPING_QUOTE })
+  @HttpCode(200)
+  @Get('cep/:postalCode')
+  @ApiOperation({
+    summary: 'Lookup Brazilian address by postal code (CEP)',
+    description:
+      'Resolves street, neighborhood, city, and state from an 8-digit CEP via BrasilAPI/ViaCEP with local caching.',
+  })
+  @ApiOkResponse({ type: CepResponse })
+  @ApiBadRequest('The postal code is not a well-formed CEP (8 digits).')
+  @ApiNotFound('CEP not found or invalid.')
+  @ApiRateLimited(RATE_LIMITS.SHIPPING_QUOTE.limit, 'minute')
+  lookupCep(@Param('postalCode') postalCode: string): Promise<CepResponse> {
+    return this.cepService.lookup(postalCode);
+  }
 
   /**
    * Rate-limited even though today's provider is local arithmetic: behind the

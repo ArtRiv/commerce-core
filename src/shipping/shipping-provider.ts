@@ -24,6 +24,9 @@ export interface ShippingQuoteItem {
    * with no weight of their own, so nothing downstream deals in nulls.
    */
   weightGrams: number;
+  heightCm?: number | null;
+  widthCm?: number | null;
+  lengthCm?: number | null;
 }
 
 export interface ShippingQuoteRequest {

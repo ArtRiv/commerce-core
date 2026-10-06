@@ -42,10 +42,23 @@ export class TableShippingProvider implements ShippingProvider {
       return Promise.resolve([]);
     }
 
-    const totalGrams = request.items.reduce(
-      (grams, item) => grams + item.weightGrams * item.quantity,
-      0,
-    );
+    const totalGrams = request.items.reduce((grams, item) => {
+      let unitGrams = item.weightGrams;
+      if (
+        item.heightCm &&
+        item.widthCm &&
+        item.lengthCm &&
+        item.heightCm > 0 &&
+        item.widthCm > 0 &&
+        item.lengthCm > 0
+      ) {
+        const cubicGrams = Math.round(
+          (item.heightCm * item.widthCm * item.lengthCm) / 6,
+        );
+        unitGrams = Math.max(unitGrams, cubicGrams);
+      }
+      return grams + unitGrams * item.quantity;
+    }, 0);
 
     // Measured against the ITEMS' subtotal, never the total: a threshold that
     // counted freight toward itself would be circular.
