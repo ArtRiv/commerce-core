@@ -221,10 +221,27 @@ rota nenhuma.
 
 Permissões existentes: `products.read|create|update|delete`,
 `orders.read|update_status|cancel|refund`, `customers.read`,
-`coupons.read|create|update|delete`, `reports.read`.
+`coupons.read|create|update|delete`, `reports.read`, `staff.manage`.
 
-Quem se registra nasce `customer`. Promover a `admin` é um `UPDATE` no
-banco (ver o runbook de loja nova do backend).
+Quem se registra nasce `customer`. A **primeira** conta admin é um `UPDATE`
+no banco (ver o runbook de loja nova do backend); depois disso a equipe se
+gerencia por `/staff`, atrás de `staff.manage`: listar, trocar papel, e
+conceder ou revogar uma permissão avulsa por cima do papel — que é como um
+`operator` ganha `products.create` sem virar admin.
+
+Três coisas que uma tela de equipe precisa saber antes de ser desenhada:
+
+- **A listagem é só de equipe** (papel diferente de `customer`, ou qualquer
+  concessão avulsa). Para promover quem ainda não é, busque por
+  `?email=` com o endereço **exato** — não existe busca por trecho, de
+  propósito.
+- **Cada conta separa `rolePermissions` de `directPermissions`.** Só as
+  segundas são revogáveis pela rota de revogar; as primeiras mudam trocando o
+  papel. `effectivePermissions` é a união e é o que a guarda vai ver.
+- **Quatro recusas para tratar em tela:** 409 ao mirar em si mesmo (conceder
+  ou trocar o próprio papel), 409 ao tentar tirar o último portador de
+  `staff.manage`, 400 num papel ou permissão que não existe, e 404 ao revogar
+  uma permissão que vem do papel. As mensagens explicam o motivo — mostre-as.
 
 As permissões de `coupons` existem no catálogo e **não têm feature
 atrás** — reservadas de propósito. Não construa UI de cupom esperando
@@ -241,6 +258,13 @@ Não assuma nenhuma destas:
   (`POST /products/{id}/variants`) e corrigir estoque
   (`PATCH /products/{id}/variants/{variantId}/stock`); o resto não.
 - **Cupons e descontos.**
+- **Convite por e-mail para a equipe.** `/staff` promove uma conta que **já
+  existe** — o funcionário se registra sozinho antes, e só então é encontrado
+  por `?email=`.
+- **Suspender, demitir ou excluir uma conta.** Tirar permissão é imediato;
+  desligar a conta inteira ainda não existe, e não dá para simular rebaixando
+  para `customer` — a pessoa continua conseguindo entrar e comprar.
+- **Listar clientes.** `customers.read` continua sem rota; `/staff` não é ela.
 - **Carrinho de convidado** — precisa estar logado para ter carrinho.
 - **Busca e filtro ricos** no catálogo.
 - **Upload de imagem** — `imageUrls` são URLs que você hospeda em outro

@@ -72,6 +72,32 @@ Sheet e o Session Management Cheat Sheet.
   `forgot-password`) sempre respondem igual, exista a conta ou não.
   A diferença de comportamento (enviar e-mail ou não) acontece só do
   lado de dentro, nunca na resposta HTTP.
+- **A exceção, e por que é uma:** `GET /staff?email=` diz se existe conta
+  naquele endereço. Ela está atrás de `staff.manage`, que é poder
+  administrativo completo (abaixo) — esconder de quem já administra a loja
+  que um e-mail tem conta seria teatro, e sem essa resposta não haveria como
+  promover alguém que ainda não é equipe sem ir ao banco. O que a rota não
+  faz é busca por trecho: igualdade exata exige já saber o endereço, e é
+  isso que a mantém do lado certo da regra acima.
+
+## Delegação de acesso
+
+- **Conceder `staff.manage` é conceder tudo.** Quem administra acesso pode
+  pôr uma conta em `admin`, e `admin` é o catálogo inteiro — então qualquer
+  contenção parcial (uma lista de permissões "não concedíveis") dá a
+  sensação de um limite que a troca de papel derruba. A escolha foi
+  **escrever a consequência** em vez de fingir contê-la, aqui, na spec, no
+  catálogo de permissões e na descrição da rota.
+- O que de fato limita o estrago: ninguém aumenta o próprio acesso (conceder
+  a si mesmo e trocar o próprio papel são recusados), toda concessão avulsa
+  fica **assinada e datada** (`grantedById`, `grantedAt`), e a loja não pode
+  ficar sem quem administre. Isso não impede um insider — ele promove uma
+  segunda conta — mas garante que toda escalada deixe duas linhas com dois
+  nomes, que é a diferença entre um incidente investigável e um mistério.
+- **Revogar fecha a porta na requisição seguinte**, porque permissões são
+  resolvidas do banco a cada requisição e nunca lidas do token. É o que faz
+  "revoguei o acesso" significar agora, e não em quinze minutos.
+  Ver [`specs/staff-management.md`](specs/staff-management.md).
 
 ## O que isso não cobre (ainda)
 

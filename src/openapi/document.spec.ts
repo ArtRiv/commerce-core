@@ -13,6 +13,7 @@ import { AppModule } from '../app.module';
 import { AuthController } from '../auth/auth.controller';
 import { PERMISSIONS_KEY } from '../auth/authz/require-permissions.decorator';
 import { IS_PUBLIC_KEY } from '../auth/public.decorator';
+import { StaffController } from '../auth/staff/staff.controller';
 import { CategoriesController } from '../catalog/categories.controller';
 import { ProductsController } from '../catalog/products.controller';
 import { CartController } from '../orders/cart.controller';
@@ -31,6 +32,7 @@ import { buildOpenApiDocument } from './document';
 const CONTROLLERS = [
   AppController,
   AuthController,
+  StaffController,
   ProductsController,
   CategoriesController,
   CartController,
@@ -52,8 +54,12 @@ const CONTROLLERS = [
  *
  * 46 since reports: the four questions a back office asks, and the ninth
  * controller (docs/specs/reports.md).
+ *
+ * 50 since staff management: listing the team, changing a role, granting and
+ * revoking a permission — the tenth controller, and the first routes that can
+ * change what another caller is allowed to do (docs/specs/staff-management.md).
  */
-const EXPECTED_ROUTE_COUNT = 46;
+const EXPECTED_ROUTE_COUNT = 50;
 
 const HTTP_METHOD = new Map<RequestMethod, string>([
   [RequestMethod.GET, 'get'],

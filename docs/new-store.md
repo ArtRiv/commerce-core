@@ -182,6 +182,25 @@ UPDATE users
  WHERE email = 'voce@dominio-da-loja';
 ```
 
+**Uma vez, e só.** Daí em diante a equipe se gerencia pela API, atrás de
+`staff.manage` — que essa primeira conta acabou de ganhar junto com o papel:
+
+```bash
+# quem já trabalha aqui, e achar uma conta pelo e-mail exato para promovê-la
+curl -H "Authorization: Bearer $TOKEN" "$BASE/staff?email=funcionario@exemplo.com"
+
+# promover, e dar o que o papel não dá
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"role":"operator"}' "$BASE/staff/$USER_ID/role"
+curl -X POST  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"permission":"products.create"}' "$BASE/staff/$USER_ID/permissions"
+```
+
+Revogar (`DELETE /staff/{id}/permissions/{permission}`) fecha a porta na
+requisição seguinte, sem esperar o token expirar. **Cuidado com
+`staff.manage`**: quem o recebe pode pôr uma conta em `admin`, então concedê-lo
+é conceder tudo — ver [`specs/staff-management.md`](specs/staff-management.md).
+
 ## 7. Custo por loja
 
 | | |

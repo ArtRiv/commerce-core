@@ -537,6 +537,407 @@
         ]
       }
     },
+    "/staff": {
+      "get": {
+        "description": "Everyone with a non-default role, plus anyone holding a per-user grant — the second half matters because a `customer` who was granted a permission is staff by capability whatever their role says.\n\nPlain shoppers are **not** listed. That is not an oversight: a customer directory is personal data and a different surface, reserved behind `customers.read`.\n\nWhich leaves one problem this route has to solve: whoever is about to be promoted is not staff yet. Pass `email` with an exact address to find any account, staff or not — knowing the address is the credential of that use case, and equality matching enumerates nothing. An address with no account is an empty page, not a 404.\n\nEach row separates what the **role** gives from what was **granted** to the person, and reports the union as `effectivePermissions` — which is exactly what the guard will see.",
+        "operationId": "StaffController_list",
+        "parameters": [
+          {
+            "name": "email",
+            "required": false,
+            "in": "query",
+            "description": "Find one account by its **exact** address, staff or not. This is how somebody who is not yet staff is found in order to be promoted — they are not in the listing by definition, and the alternative would be reading their id out of the database.\n\nMatching is on equality, case-insensitively (the address is normalized the way registration normalizes it). There is no substring search, on purpose: that would turn this route into a way to enumerate the store’s customers.",
+            "schema": {
+              "format": "email",
+              "example": "novo.funcionario@example.com",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": false,
+            "in": "query",
+            "description": "Values above 100 are clamped, not rejected.",
+            "schema": {
+              "minimum": 1,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedStaffResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`email` is not an address, or `page`/`perPage` is not an integer above zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `staff.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the staff accounts",
+        "tags": [
+          "staff"
+        ]
+      }
+    },
+    "/staff/{userId}/role": {
+      "patch": {
+        "description": "Moves the account to another role, by name. This is how a shopper becomes an `operator`, and how an `operator` stops being one.\n\n**Not your own**, ever: a role change adds as easily as it removes — `operator` → `admin` is this same route — so it is not a decision anybody makes about themselves. Ask another holder of `staff.manage`; if you are the only one, that is the store telling you to appoint a second before you step down.\n\nPer-user grants **survive** the change. Demoting an account does not take back what was granted to the person, which is visible in the `effectivePermissions` of the response — worth reading before assuming a demotion removed everything.\n\nTakes effect on the account’s **next request**, with the token it already holds: permissions are resolved from the database on every request rather than baked into the token. Revoking closes the door now, not in fifteen minutes.",
+        "operationId": "StaffController_changeRole",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRoleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffAccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No role by that name. The message lists the ones that exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `staff.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No account with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The target is the caller, or the change would leave the store with nobody holding `staff.manage`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Change an account’s role",
+        "tags": [
+          "staff"
+        ]
+      }
+    },
+    "/staff/{userId}/permissions": {
+      "post": {
+        "description": "One permission on top of the role — the way an `operator` hired to catalogue pieces gets `products.create` without becoming an `admin`.\n\n**You cannot grant to yourself.** That refusal is the reason this route cannot be used to promote the account that is calling it.\n\n**Granting `staff.manage` is granting everything.** Not in one step, but in two nobody can prevent: whoever manages access can move an account to `admin`, and `admin` is the whole catalogue. Delegate it to somebody you would have made an admin.\n\nGranting the same permission twice is a no-op and answers 200; the original `grantedAt` and `grantedById` stay, because the first grant is the record. Granting one the role already carries is allowed — the grant survives a later role change.\n\nTakes effect on the account’s **next request**, with the token it already holds: permissions are resolved from the database on every request rather than baked into the token. Revoking closes the door now, not in fifteen minutes.",
+        "operationId": "StaffController_grant",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantPermissionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The account, with the grant in place. 200 on a repeat too.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffAccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`permission` is not a key in the catalogue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `staff.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No account with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The target is the caller. Nobody grants themselves anything.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Grant a permission to an account",
+        "tags": [
+          "staff"
+        ]
+      }
+    },
+    "/staff/{userId}/permissions/{permission}": {
+      "delete": {
+        "description": "Removes one **granted** permission. A permission that comes from the role is not here to remove: that is a 404 whose message points at the role, because clicking again would not help.\n\nThis is the one route a caller may aim at themselves, and the asymmetry is deliberate: giving up access is never an escalation, and handing the keys back is a legitimate act. What it may **not** do is leave the store with nobody holding `staff.manage` — that is a 409 saying so, because afterwards nobody could grant it to anybody and the only way back would be editing the database.\n\nThe count behind that refusal is of **holders**, not of admins: an `operator` carrying the grant administers exactly as much as an `admin` does.\n\nTakes effect on the account’s **next request**, with the token it already holds: permissions are resolved from the database on every request rather than baked into the token. Revoking closes the door now, not in fifteen minutes.",
+        "operationId": "StaffController_revoke",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "permission",
+            "required": true,
+            "in": "path",
+            "description": "The granted permission to remove, e.g. `products.create`.",
+            "schema": {
+              "enum": [
+                "products.read",
+                "products.create",
+                "products.update",
+                "products.delete",
+                "orders.read",
+                "orders.update_status",
+                "orders.cancel",
+                "orders.refund",
+                "customers.read",
+                "coupons.read",
+                "coupons.create",
+                "coupons.update",
+                "coupons.delete",
+                "reports.read",
+                "staff.manage"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account, without that grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffAccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`permission` is not a key in the catalogue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `staff.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No account with that id, or that account has no such **granted** permission — one held through the role is removed by changing the role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It would remove the last account holding `staff.manage`, leaving nobody able to manage access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke a granted permission",
+        "tags": [
+          "staff"
+        ]
+      }
+    },
     "/products": {
       "get": {
         "description": "The storefront listing. Public, but privilege-aware: **sending a bearer token that carries `products.read` changes what comes back**, since only that caller may use the `status` filter and therefore see DRAFT or ARCHIVED products. Without a token, or with one lacking the permission, the listing is ACTIVE products only.\n\nOpenAPI cannot express \"optional bearer\", so this route is documented as unauthenticated — but a token is accepted, and a token that is offered and rejected is a 401 rather than a silent downgrade to anonymous.",
@@ -3343,7 +3744,7 @@
   },
   "info": {
     "title": "commerce-core",
-    "description": "Headless e-commerce API.\n\n### Authentication\n\nEvery route requires a bearer access token **except** those marked without a\nlock — authentication is on by default (a global guard) and routes opt out\nexplicitly, so a route that forgets to is private rather than exposed.\n\nAccess tokens last 15 minutes and carry only the user id: roles and\npermissions are resolved from the database on every request, so a permission\nrevoked now is revoked now, not in fifteen minutes. Trade the refresh token at\n`POST /auth/refresh` for a fresh pair; refresh tokens are single-use, and\nre-presenting a spent one revokes the whole session family as a theft signal.\n\n### Authorization\n\nBack-office routes are gated on a **permission**, never on a role — roles are\nrows in the database that map to a set of permissions, so a route saying\n\"needs `orders.refund`\" stays correct when the definition of `admin`\nchanges. Each gated route names its permission in the description of its\n`403` response.\n\nOut of the box: `customer` holds none, `operator` holds\n`products.read`, `orders.read`, `orders.update_status`,\n`customers.read`, `coupons.read` and `reports.read`, and `admin`\nholds every permission — including `orders.refund`, which nothing else does.\n\n### Errors\n\nFailures share one body — `{ statusCode, message, error }` — where\n`message` is an array of strings when a DTO fails validation and a single\nstring otherwise. The status codes are used consistently:\n\n| Code | Meaning |\n| ---- | ------- |\n| 400 | Malformed input. |\n| 401 | No token, or a token that was offered and rejected. |\n| 403 | Authenticated, but lacking the permission the route names. |\n| 404 | Does not exist **or belongs to someone else** — deliberately indistinguishable, so that probing ids reveals nothing. |\n| 409 | A valid request that conflicts with current state (an invalid lifecycle transition, insufficient stock, a stale freight quote). |\n| 429 | Rate limited. Carries `Retry-After`. |\n| 503 | A provider this route depends on is unreachable. |\n\n### Money\n\nAll amounts are **integer cents** of a single currency (BRL). There are no\nfloats anywhere in this API.",
+    "description": "Headless e-commerce API.\n\n### Authentication\n\nEvery route requires a bearer access token **except** those marked without a\nlock — authentication is on by default (a global guard) and routes opt out\nexplicitly, so a route that forgets to is private rather than exposed.\n\nAccess tokens last 15 minutes and carry only the user id: roles and\npermissions are resolved from the database on every request, so a permission\nrevoked now is revoked now, not in fifteen minutes. Trade the refresh token at\n`POST /auth/refresh` for a fresh pair; refresh tokens are single-use, and\nre-presenting a spent one revokes the whole session family as a theft signal.\n\n### Authorization\n\nBack-office routes are gated on a **permission**, never on a role — roles are\nrows in the database that map to a set of permissions, so a route saying\n\"needs `orders.refund`\" stays correct when the definition of `admin`\nchanges. Each gated route names its permission in the description of its\n`403` response.\n\nOut of the box: `customer` holds none, `operator` holds\n`products.read`, `orders.read`, `orders.update_status`,\n`customers.read`, `coupons.read` and `reports.read`, and `admin`\nholds every permission — including `orders.refund` and `staff.manage`,\nwhich nothing else does.\n\nThose defaults are a starting point, not a ceiling: `/staff` grants a\npermission to one account on top of its role, so the person hired to\ncatalogue pieces gets `products.create` without becoming an admin. Be\ndeliberate with `staff.manage` itself — whoever holds it can move an\naccount to `admin`, so granting it is granting everything.\n\n### Errors\n\nFailures share one body — `{ statusCode, message, error }` — where\n`message` is an array of strings when a DTO fails validation and a single\nstring otherwise. The status codes are used consistently:\n\n| Code | Meaning |\n| ---- | ------- |\n| 400 | Malformed input. |\n| 401 | No token, or a token that was offered and rejected. |\n| 403 | Authenticated, but lacking the permission the route names. |\n| 404 | Does not exist **or belongs to someone else** — deliberately indistinguishable, so that probing ids reveals nothing. |\n| 409 | A valid request that conflicts with current state (an invalid lifecycle transition, insufficient stock, a stale freight quote). |\n| 429 | Rate limited. Carries `Retry-After`. |\n| 503 | A provider this route depends on is unreachable. |\n\n### Money\n\nAll amounts are **integer cents** of a single currency (BRL). There are no\nfloats anywhere in this API.",
     "version": "1.0.0",
     "contact": {}
   },
@@ -3383,6 +3784,10 @@
     {
       "name": "reports",
       "description": "Read-only aggregates for a back office: what sold, what it earned, what is sitting in carts, and what is not moving. Every route is gated on `reports.read`."
+    },
+    {
+      "name": "staff",
+      "description": "Who works here: list the team, change a role, grant and revoke a per-user permission. Every route is gated on `staff.manage`, which is itself grantable — and granting it is granting everything, two steps out."
     }
   ],
   "servers": [],
@@ -3603,6 +4008,182 @@
         },
         "required": [
           "refreshToken"
+        ]
+      },
+      "StaffGrantResponse": {
+        "type": "object",
+        "properties": {
+          "permission": {
+            "type": "string",
+            "description": "The permission key, from the catalogue.",
+            "example": "products.create"
+          },
+          "grantedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was granted. Granting the same permission again is a no-op and leaves this at the first grant — the original act is the fact worth keeping."
+          },
+          "grantedById": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Who granted it. Null when that account no longer exists: the grant outlives the granter, because leaving does not take back the access you gave.\n\nAn id rather than an address — the granter is staff and therefore in this same listing, so a panel resolves the name without this route copying e-mail addresses inside other objects."
+          }
+        },
+        "required": [
+          "permission",
+          "grantedAt",
+          "grantedById"
+        ]
+      },
+      "StaffAccountResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "joana@example.com"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Null on an account created through Google that never set one.",
+            "example": "Joana"
+          },
+          "role": {
+            "type": "string",
+            "description": "Role name. Change it with `PATCH /staff/{userId}/role`.",
+            "example": "operator"
+          },
+          "rolePermissions": {
+            "description": "What the **role** grants. Not revocable here: these move when the role moves.",
+            "example": [
+              "products.read",
+              "orders.read"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "directPermissions": {
+            "description": "Grants made to this account on top of its role, oldest first. These are the ones `DELETE /staff/{userId}/permissions/{permission}` removes.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaffGrantResponse"
+            }
+          },
+          "effectivePermissions": {
+            "description": "The union of the two above — **what the guard will actually see on the next request**, resolved by the same function the token strategy uses. A key that is no longer in the catalogue appears in `directPermissions` and not here, because it grants nothing.",
+            "example": [
+              "products.create",
+              "products.read"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "emailVerifiedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Null on an account that has not proven its address yet. It does not affect authorization — verification gates password login, so an unverified account simply cannot sign in to use what it was granted."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "rolePermissions",
+          "directPermissions",
+          "effectivePermissions",
+          "emailVerifiedAt",
+          "createdAt"
+        ]
+      },
+      "PaginatedStaffResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "Ordered by e-mail, ascending.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaffAccountResponse"
+            }
+          },
+          "total": {
+            "type": "number",
+            "description": "Accounts matching the filter, not the page size.",
+            "example": 3
+          },
+          "page": {
+            "type": "number",
+            "example": 1
+          },
+          "perPage": {
+            "type": "number",
+            "description": "Clamped to 100.",
+            "example": 20
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "perPage"
+        ]
+      },
+      "ChangeRoleDto": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Name of the role this account moves to. The seeded roles are `customer` (no back-office access), `operator` (reads the catalogue, works the orders) and `admin` (everything, including `staff.manage`).\n\nAn unknown name is a **400** that lists the valid ones, rather than a 404: a role is a value from a small closed vocabulary here, not a resource whose existence could be worth hiding.",
+            "example": "operator"
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "GrantPermissionDto": {
+        "type": "object",
+        "properties": {
+          "permission": {
+            "type": "string",
+            "enum": [
+              "products.read",
+              "products.create",
+              "products.update",
+              "products.delete",
+              "orders.read",
+              "orders.update_status",
+              "orders.cancel",
+              "orders.refund",
+              "customers.read",
+              "coupons.read",
+              "coupons.create",
+              "coupons.update",
+              "coupons.delete",
+              "reports.read",
+              "staff.manage"
+            ],
+            "description": "The permission to grant. A key outside the catalogue is a 400.\n\nGranting one the role already carries is allowed and is not pointless: a grant **survives a role change**, so the account keeps it after a demotion. Granting `staff.manage` hands over the ability to hand over everything — see the description of this route.",
+            "example": "products.create"
+          }
+        },
+        "required": [
+          "permission"
         ]
       },
       "ProductVariantResponse": {

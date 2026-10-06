@@ -75,23 +75,36 @@ pnpm start:dev
 Com o app de pé, **<http://localhost:3000/docs>** é a Swagger UI navegável.
 Crie a primeira conta em `POST /auth/register`.
 
-Duas coisas que o cadastro não dá, **de propósito**, e que hoje só se resolvem
-no banco:
+Duas coisas que o cadastro não dá, **de propósito**, e que se resolvem no banco
+**uma vez**:
 
 ```sql
 -- verificar o e-mail sem esperar a mensagem (precisa de RESEND_API_KEY real)
 update users set email_verified_at = now(), updated_at = now()
 where email = 'voce@exemplo.com';
 
--- promover a conta a admin
+-- promover a PRIMEIRA conta a admin
 update users set role_id = (select id from roles where name = 'admin'),
   updated_at = now()
 where email = 'voce@exemplo.com';
 ```
 
-Não existe rota para nenhuma das duas — nem aqui nem em lugar nenhum da API.
-Verificação por rota seria um bypass do e-mail, e gestão de papéis é uma lacuna
-conhecida: ver [Limitações](#limitações).
+Verificação por rota seria um bypass do e-mail, então essa não tem rota nenhuma
+e nunca terá.
+
+O `UPDATE` do papel é diferente: ele é só o **bootstrap**. Depois da primeira
+conta admin, quem trabalha na loja se gerencia pela API — `GET /staff` lista a
+equipe e acha uma conta pelo e-mail exato, `PATCH /staff/{userId}/role` troca o
+papel, e `POST`/`DELETE /staff/{userId}/permissions` concede e revoga uma
+permissão avulsa por cima do papel (é assim que um `operator` contratado para
+cadastrar peça ganha `products.create` sem virar admin). Tudo atrás de
+`staff.manage`, que só o `admin` tem de fábrica e que é ele próprio
+concedível — **conceder `staff.manage` é conceder tudo**, porque quem administra
+acesso pode pôr uma conta em `admin`. Ver
+[`docs/specs/staff-management.md`](docs/specs/staff-management.md).
+
+O primeiro admin continua sendo SQL porque não há a quem pedir: a rota que
+concede exige a permissão que ninguém ainda tem.
 
 ```bash
 # produção
@@ -101,7 +114,7 @@ pnpm start:prod
 
 ## Documentação da API
 
-Com o app no ar, a spec OpenAPI 3 completa — 38 caminhos, 46 operações — fica em:
+Com o app no ar, a spec OpenAPI 3 completa — 42 caminhos, 50 operações — fica em:
 
 - **`/docs`** — Swagger UI, navegável, com "Authorize" pro bearer token
 - **`/docs-json`** — o documento cru
@@ -158,13 +171,20 @@ desenvolvimento apagaria o catálogo.
 
 O que a v1 deliberadamente **não** tem, para não haver surpresa ao integrar:
 
-- **Não há rota de gestão de acesso.** O modelo de autorização existe e é
-  aplicado: 14 permissões no catálogo, três papéis padrão, uma tabela
-  `user_permissions` para concessão avulsa por cima do papel, e o
-  `jwt.strategy` somando papel + avulsas em toda requisição autenticada. O que
-  não existe é endpoint — nenhuma das 38 rotas lista usuário, troca papel ou
-  concede permissão. Hoje isso é `UPDATE` no banco, como no passo 6 acima.
+- **O primeiro admin ainda é `UPDATE` no banco.** Gestão de acesso agora tem
+  rota (`/staff`, atrás de `staff.manage`), mas ela exige a permissão que
+  ninguém tem numa instalação nova — então a conta zero é promovida no banco,
+  como no passo 6 acima, e daí em diante ninguém mais precisa.
+- **Não há convite por e-mail.** As rotas de equipe promovem uma conta que
+  **já existe**; criar a conta do funcionário é ele mesmo se registrar.
+- **`staff.manage` não é contido.** Quem o tem pode pôr uma conta em `admin`,
+  então na prática ele equivale a admin. Está escrito assim de propósito — a
+  alternativa seria uma meia-contenção que a troca de papel derruba. Ver a
+  invariante 2 de [`docs/specs/staff-management.md`](docs/specs/staff-management.md).
 - **Não há ciclo de vida de conta**: suspender, arquivar ou excluir um usuário.
+  Suspender de verdade exige recusar no `jwt.strategy` **e** revogar a família
+  de refresh tokens; sem as duas metades é um botão que não faz nada por quinze
+  minutos. Revogar permissão, esse sim, fecha a porta na requisição seguinte.
 - **Não há `/auth/me`.** Nenhuma rota descreve o chamador, e o access token
   carrega só `{ sub }` — um front-end que queira mostrar o nome de quem está
   logado precisa guardá-lo por conta própria no login.
