@@ -2,7 +2,10 @@ import { Logger, Module, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type Stripe from 'stripe';
 
+import { AsaasPaymentProvider } from './asaas-payment.provider';
 import { FakePaymentProvider } from './fake-payment.provider';
+import { HybridPaymentProvider } from './hybrid-payment.provider';
+import { MercadoPagoPaymentProvider } from './mercadopago-payment.provider';
 import { PAYMENT_PROVIDER, type PaymentProvider } from './payment-provider';
 import {
   isStripeConfigured,
@@ -12,53 +15,98 @@ import {
 import { StripePaymentProvider } from './stripe-payment.provider';
 
 /**
- * Stripe when configured, the fake when not — and never the fake in production.
- *
- * The middle case is the point: cloning this repo without a Stripe account
- * still gives a checkout that works end to end, the same courtesy auth extends
- * for Google sign-in. The production guard is what keeps that courtesy from
- * becoming a disaster, because a deploy that quietly stops charging money is a
- * worse failure than one that refuses to boot.
- */
-/**
  * Environments where falling back to the fake is a convenience rather than a
  * hole. Anything else — including NODE_ENV being unset — is treated as real.
  */
 const FAKE_PAYMENTS_ALLOWED = new Set(['development', 'test']);
 
+/**
+ * Returns true when ASAAS_API_KEY and ASAAS_WEBHOOK_SECRET are both present.
+ * Both or neither: a key without a secret charges money and can never confirm
+ * it arrived.
+ */
+function isAsaasConfigured(config: ConfigService): boolean {
+  return Boolean(
+    config.get<string>('ASAAS_API_KEY') &&
+    config.get<string>('ASAAS_WEBHOOK_SECRET'),
+  );
+}
+
+/**
+ * Returns true when MERCADOPAGO_ACCESS_TOKEN and MERCADOPAGO_WEBHOOK_SECRET
+ * are both present.
+ */
+function isMercadoPagoConfigured(config: ConfigService): boolean {
+  return Boolean(
+    config.get<string>('MERCADOPAGO_ACCESS_TOKEN') &&
+    config.get<string>('MERCADOPAGO_WEBHOOK_SECRET'),
+  );
+}
+
+/**
+ * Resolves which concrete providers to bind under the PAYMENT_PROVIDER token.
+ *
+ * When all three gateways are configured, a HybridPaymentProvider is returned
+ * that routes PIX to Asaas, card to Mercado Pago, and Stripe as fallback.
+ *
+ * When only some gateways are configured, the hybrid still wires up what it
+ * has and falls back to FakePaymentProvider for the rest — this lets the store
+ * work during a partial migration.
+ *
+ * The production guard remains: if NODE_ENV is not 'development' or 'test' and
+ * no real gateway is configured, the app refuses to boot.
+ */
 export function resolvePaymentProvider(
   config: ConfigService,
   stripe: Stripe | null,
 ): PaymentProvider {
-  if (stripe && isStripeConfigured(config)) {
-    return new StripePaymentProvider(stripe, config);
-  }
-
-  // Allow-list, not a deny-list, and that asymmetry is the whole point.
-  // FakePaymentProvider does no signature verification — its webhook takes the
-  // request body AS the event — so anyone who can reach /payments/webhook can
-  // mark any order paid. Refusing only when NODE_ENV === 'production' made that
-  // one unset variable away on a staging box or a platform that does not set it,
-  // and the failure was silent: a warning line, then a wide-open route in front
-  // of a real database. Defaulting to "this is real" costs a dev one explicit
-  // NODE_ENV and removes the fail-open entirely.
   const environment = config.get<string>('NODE_ENV')?.trim().toLowerCase();
+  const asaasCfg = isAsaasConfigured(config);
+  const mpCfg = isMercadoPagoConfigured(config);
+  const stripeCfg = stripe && isStripeConfigured(config);
+  const anyReal = asaasCfg || mpCfg || stripeCfg;
 
-  if (!environment || !FAKE_PAYMENTS_ALLOWED.has(environment)) {
-    throw new Error(
-      'STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required unless NODE_ENV is ' +
-        `'development' or 'test' (NODE_ENV is ${environment ? `'${environment}'` : 'unset'}) — ` +
-        'refusing to start a store that cannot charge anyone and whose webhook accepts ' +
-        'unsigned events.',
+  if (!anyReal) {
+    if (!environment || !FAKE_PAYMENTS_ALLOWED.has(environment)) {
+      throw new Error(
+        'No payment gateway is fully configured. At least one of (ASAAS_API_KEY + ASAAS_WEBHOOK_SECRET), ' +
+          '(MERCADOPAGO_ACCESS_TOKEN + MERCADOPAGO_WEBHOOK_SECRET), or (STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET) ' +
+          `is required unless NODE_ENV is 'development' or 'test' ` +
+          `(NODE_ENV is ${environment ? `'${environment}'` : 'unset'}).`,
+      );
+    }
+
+    new Logger('PaymentsModule').warn(
+      'No payment gateway is configured; using FakePaymentProvider for all methods. ' +
+        'No money will move, and the webhook routes accept unsigned events.',
     );
+
+    return new FakePaymentProvider(config);
   }
 
-  new Logger('PaymentsModule').warn(
-    'Stripe is not configured; using FakePaymentProvider. No money will move, ' +
-      'and the webhook route accepts unsigned events.',
-  );
+  // Build a fake as the baseline for any unconfirmed gateway.
+  const fakeProvider = new FakePaymentProvider(config);
 
-  return new FakePaymentProvider(config);
+  const asaasProvider: PaymentProvider = asaasCfg
+    ? new AsaasPaymentProvider(config)
+    : fakeProvider;
+
+  const mpProvider: PaymentProvider = mpCfg
+    ? new MercadoPagoPaymentProvider(config)
+    : fakeProvider;
+
+  let stripeProvider: PaymentProvider;
+
+  if (stripeCfg) {
+    stripeProvider = new StripePaymentProvider(stripe, config);
+  } else {
+    new Logger('PaymentsModule').warn(
+      'Stripe is not configured; Stripe-method payments will use FakePaymentProvider.',
+    );
+    stripeProvider = fakeProvider;
+  }
+
+  return new HybridPaymentProvider(asaasProvider, mpProvider, stripeProvider);
 }
 
 const paymentProvider: Provider = {
@@ -68,14 +116,14 @@ const paymentProvider: Provider = {
 };
 
 /**
- * Owns the gateway and nothing else (docs/architecture/modules.md): the
- * PaymentProvider token with an adapter behind it, same shape as `mail`.
+ * Owns the gateway layer and nothing else (docs/architecture/modules.md):
+ * the PaymentProvider token with a HybridPaymentProvider behind it that
+ * routes by method (PIX → Asaas, CREDIT_CARD → Mercado Pago, STRIPE → Stripe).
  *
  * Not @Global on purpose — only orders charges money, and importing this module
- * is how that dependency stays visible in the module graph. Note what is NOT
- * here: no controller and no database access. Reacting to a payment is a change
- * to an ORDER, so that handler lives in `orders` and this module never learns
- * that orders exist. That is what keeps the arrow pointing one way.
+ * is how that dependency stays visible in the module graph. No controller and no
+ * database access live here: reacting to a payment is a change to an ORDER, so
+ * those handlers live in `orders` and this module never learns that orders exist.
  */
 @Module({
   providers: [stripeClientProvider, paymentProvider],

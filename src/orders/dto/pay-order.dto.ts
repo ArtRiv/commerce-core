@@ -4,6 +4,8 @@ import { IsIn, IsOptional } from 'class-validator';
 import {
   CHECKOUT_MODES,
   type CheckoutMode,
+  PAYMENT_METHODS,
+  type PaymentMethod,
 } from '../../payments/payment-provider';
 
 /**
@@ -21,4 +23,19 @@ export class PayOrderDto {
   @IsOptional()
   @IsIn(CHECKOUT_MODES)
   paymentMode?: CheckoutMode;
+
+  /**
+   * Override the payment method for the new session. When omitted, the order's
+   * already-stored paymentMethod is used if available, otherwise defaults to
+   * STRIPE for backward compatibility.
+   */
+  @ApiPropertyOptional({
+    enum: PAYMENT_METHODS,
+    description:
+      'Override the payment method for the new session. Omit to reuse the method chosen at checkout.',
+    example: 'PIX',
+  })
+  @IsOptional()
+  @IsIn(PAYMENT_METHODS)
+  paymentMethod?: PaymentMethod;
 }

@@ -42,7 +42,7 @@ import { WebhookAckResponse } from './responses/webhook-ack.response';
 const WEBHOOK_DESCRIPTION = [
   'Called by the payment provider, never by application code. **Do not generate a client for this route** — it exists to be configured as a webhook destination in the provider dashboard.',
   "**There is no request schema, and none is invented here.** The body is the provider's own event envelope, read as raw bytes and never parsed by this API before its signature is checked. It is not part of this API's contract: the provider changes it when it likes, and the only part that matters here — the signature — travels in a header. The global validation pipe never sees this body either, because no DTO describes it.",
-  'Authentication is the `stripe-signature` header, an HMAC over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.',
+  'Authentication is the gateway-specific signature header, an HMAC (or token comparison) over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.',
   'A 200 means "recorded, stop redelivering", replays included: a redelivered event is acknowledged with `duplicate: true` rather than applied twice. Any non-2xx asks the provider to try again, which is this module\'s entire retry mechanism — the 503 below is deliberate for exactly that reason.',
 ].join('\n\n');
 
@@ -53,7 +53,7 @@ const WEBHOOK_DESCRIPTION = [
  * says otherwise: reacting to a payment is a change to an ORDER, and putting
  * it in `payments` would make payments depend on orders — a cycle, and the
  * reverse of the rule in docs/architecture/modules.md. What keeps that honest
- * is that nothing here is Stripe-shaped: the provider verifies and translates,
+ * is that nothing here is gateway-shaped: the provider verifies and translates,
  * and this route only ever sees a domain PaymentEvent.
  *
  * Tagged `payments` for the same reason the URL says payments: a consumer
@@ -63,6 +63,11 @@ const WEBHOOK_DESCRIPTION = [
  * Public by necessity — the caller is a machine with no account. The signature
  * is the authentication, and it is the only thing standing between this route
  * and anyone on the internet declaring an order paid.
+ *
+ * Dedicated gateway endpoints (/webhook/asaas, /webhook/mercadopago,
+ * /webhook/stripe) are provided for dashboard configuration; they all delegate
+ * to the same HybridPaymentProvider.parseEvent() which dispatches by header
+ * presence. The generic /webhook remains for backward compatibility.
  */
 @ApiTags('payments')
 @Controller('payments')
@@ -74,20 +79,21 @@ export class PaymentWebhookController {
     private readonly events: PaymentEventsService,
   ) {}
 
+  /** Retrocompatible generic endpoint — the hybrid router dispatches by headers. */
   @Public()
   @UseGuards(ClientIpThrottlerGuard)
   @Throttle({ default: RATE_LIMITS.PAYMENT_WEBHOOK })
   @HttpCode(200)
   @Post('webhook')
   @ApiOperation({
-    summary: 'Receive a payment provider event',
+    summary: 'Receive a payment provider event (generic)',
     description: WEBHOOK_DESCRIPTION,
   })
   @ApiHeader({
     name: 'stripe-signature',
-    required: true,
+    required: false,
     description:
-      'HMAC over the raw request body. Verifying it is the authentication of this route.',
+      'Present on Stripe events. The hybrid router dispatches by whichever signature header is present.',
   })
   @ApiBody({
     required: true,
@@ -103,7 +109,112 @@ export class PaymentWebhookController {
   @ApiServiceUnavailable(
     'Refused on purpose so the provider redelivers — a refund arriving before the payment that explains it, for instance. The event stays unprocessed rather than being marked done with the order left wrong.',
   )
-  async handle(@Req() request: RawBodyRequest<Request>) {
+  handle(@Req() request: RawBodyRequest<Request>) {
+    return this.dispatch(request);
+  }
+
+  /**
+   * Dedicated Asaas endpoint for dashboard configuration.
+   * Authenticated by the `asaas-access-token` header.
+   */
+  @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.PAYMENT_WEBHOOK })
+  @HttpCode(200)
+  @Post('webhook/asaas')
+  @ApiOperation({
+    summary: 'Receive an Asaas payment event',
+    description: WEBHOOK_DESCRIPTION,
+  })
+  @ApiHeader({
+    name: 'asaas-access-token',
+    required: true,
+    description:
+      'The Asaas webhook token. Must equal ASAAS_WEBHOOK_SECRET for the event to be accepted.',
+  })
+  @ApiBody({
+    required: true,
+    description: 'Asaas raw event payload.',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiOkResponse({ type: WebhookAckResponse })
+  @ApiBadRequest('Body missing or asaas-access-token is invalid.')
+  @ApiRateLimited(RATE_LIMITS.PAYMENT_WEBHOOK.limit, 'minute')
+  @ApiServiceUnavailable('Refused so Asaas redelivers.')
+  handleAsaas(@Req() request: RawBodyRequest<Request>) {
+    return this.dispatch(request);
+  }
+
+  /**
+   * Dedicated Mercado Pago endpoint for dashboard configuration.
+   * Authenticated by HMAC-SHA256 in the `x-signature` header.
+   */
+  @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.PAYMENT_WEBHOOK })
+  @HttpCode(200)
+  @Post('webhook/mercadopago')
+  @ApiOperation({
+    summary: 'Receive a Mercado Pago payment event',
+    description: WEBHOOK_DESCRIPTION,
+  })
+  @ApiHeader({
+    name: 'x-signature',
+    required: true,
+    description:
+      'Mercado Pago HMAC signature header (ts=<timestamp>,v1=<hmac>).',
+  })
+  @ApiBody({
+    required: true,
+    description: 'Mercado Pago raw event payload.',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiOkResponse({ type: WebhookAckResponse })
+  @ApiBadRequest('Body missing or x-signature is invalid.')
+  @ApiRateLimited(RATE_LIMITS.PAYMENT_WEBHOOK.limit, 'minute')
+  @ApiServiceUnavailable('Refused so Mercado Pago redelivers.')
+  handleMercadoPago(@Req() request: RawBodyRequest<Request>) {
+    return this.dispatch(request);
+  }
+
+  /**
+   * Dedicated Stripe endpoint for dashboard configuration.
+   * Authenticated by HMAC-SHA256 in the `stripe-signature` header.
+   */
+  @Public()
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle({ default: RATE_LIMITS.PAYMENT_WEBHOOK })
+  @HttpCode(200)
+  @Post('webhook/stripe')
+  @ApiOperation({
+    summary: 'Receive a Stripe payment event',
+    description: WEBHOOK_DESCRIPTION,
+  })
+  @ApiHeader({
+    name: 'stripe-signature',
+    required: true,
+    description:
+      'Stripe HMAC signature header. Verifying it is the authentication of this route.',
+  })
+  @ApiBody({
+    required: true,
+    description: 'Stripe raw event payload.',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiOkResponse({ type: WebhookAckResponse })
+  @ApiBadRequest('Body missing or stripe-signature is invalid.')
+  @ApiRateLimited(RATE_LIMITS.PAYMENT_WEBHOOK.limit, 'minute')
+  @ApiServiceUnavailable('Refused so Stripe redelivers.')
+  handleStripe(@Req() request: RawBodyRequest<Request>) {
+    return this.dispatch(request);
+  }
+
+  /**
+   * Core dispatch: reads rawBody, calls parseEvent (which dispatches to the
+   * correct provider by header presence in HybridPaymentProvider), and
+   * forwards the domain event to PaymentEventsService.
+   */
+  private async dispatch(request: RawBodyRequest<Request>) {
     // The exact bytes, not the parsed body: the signature is an HMAC over what
     // was sent, and JSON.stringify(request.body) does not reproduce it (key
     // order, spacing, unicode escapes). This is why the app is created with

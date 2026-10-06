@@ -7,6 +7,7 @@ import type {
   CheckoutMode,
   CreatePaymentInput,
   PaymentEvent,
+  PaymentMethod,
   PaymentProvider,
   PaymentSession,
   SessionLookup,
@@ -23,13 +24,25 @@ const EVENT_TYPES = new Set([
 ]);
 
 /**
- * The provider for anywhere Stripe is not configured: local development, CI,
- * and the parts of the e2e suite that are not about Stripe.
+ * A minimal fake PIX QR Code used in development so the checkout UI has
+ * something to render without hitting the Asaas API. The image is a 1×1
+ * transparent PNG encoded as base64 — enough to prove the rendering path
+ * works without shipping an actual QR Code into the source tree.
+ */
+const FAKE_PIX_QR_IMAGE =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+const FAKE_PIX_PAYLOAD =
+  '00020126360014BR.GOV.BCB.PIX01141234567890120204000053039865802BR5913AVESSO STORE6009SAO PAULO62070503***6304FAKE';
+
+/**
+ * The provider for anywhere real gateways are not configured: local development,
+ * CI, and the parts of the e2e suite that are not about the real gateways.
  *
  * It is a real implementation of the interface rather than a stub — it issues
  * sessions, remembers them so /orders/:id/pay can exercise its reuse path, and
  * expires them — so the whole purchase flow works end to end on a fresh clone
- * with no Stripe account. What it cannot do is verify a signature: parseEvent
+ * with no external accounts. What it cannot do is verify a signature: parseEvent
  * accepts an unsigned domain event straight from the body, which is a gaping
  * hole and precisely why PaymentsModule refuses to bind this provider when
  * NODE_ENV is production.
@@ -37,6 +50,9 @@ const EVENT_TYPES = new Set([
  * Sessions live in memory, so they do not survive a restart. That is the
  * correct amount of fidelity for a fake: the order simply looks like one whose
  * session expired, and /pay issues another.
+ *
+ * PIX sessions include a fake QR Code and Copia e Cola payload so the checkout
+ * UI can render them without an Asaas connection.
  */
 @Injectable()
 export class FakePaymentProvider implements PaymentProvider {
@@ -55,21 +71,57 @@ export class FakePaymentProvider implements PaymentProvider {
   createPayment({
     orderId,
     mode,
+    method,
   }: CreatePaymentInput): Promise<PaymentSession> {
     const checkoutMode = mode ?? this.defaultMode;
-    const providerRef = `fake_cs_${randomUUID()}`;
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
-    const session: PaymentSession = {
-      providerRef,
-      mode: checkoutMode,
-      url:
-        checkoutMode === 'hosted'
-          ? `${this.appUrl}/checkout/fake?order=${encodeURIComponent(orderId)}&session=${providerRef}`
-          : null,
-      clientSecret:
-        checkoutMode === 'embedded' ? `${providerRef}_secret` : null,
-      expiresAt: new Date(Date.now() + SESSION_TTL_MS),
-    };
+    let providerRef: string;
+    let session: PaymentSession;
+
+    if (method === 'PIX') {
+      providerRef = `fake_asaas_${randomUUID()}`;
+      session = {
+        providerRef,
+        mode: 'hosted',
+        url: null,
+        clientSecret: null,
+        expiresAt,
+        method: 'PIX',
+        pix: {
+          payload: FAKE_PIX_PAYLOAD,
+          encodedImage: FAKE_PIX_QR_IMAGE,
+          expirationDate: expiresAt,
+        },
+      };
+    } else if (method === 'CREDIT_CARD') {
+      providerRef = `fake_mp_${randomUUID()}`;
+      session = {
+        providerRef,
+        mode: 'hosted',
+        url: `${this.appUrl}/checkout/fake?order=${encodeURIComponent(orderId)}&session=${providerRef}&method=CREDIT_CARD`,
+        clientSecret: null,
+        expiresAt,
+        method: 'CREDIT_CARD',
+        pix: null,
+      };
+    } else {
+      // Stripe / default
+      providerRef = `fake_cs_${randomUUID()}`;
+      session = {
+        providerRef,
+        mode: checkoutMode,
+        url:
+          checkoutMode === 'hosted'
+            ? `${this.appUrl}/checkout/fake?order=${encodeURIComponent(orderId)}&session=${providerRef}`
+            : null,
+        clientSecret:
+          checkoutMode === 'embedded' ? `${providerRef}_secret` : null,
+        expiresAt,
+        method: 'STRIPE',
+        pix: null,
+      };
+    }
 
     this.sessions.set(providerRef, session);
 
@@ -80,7 +132,7 @@ export class FakePaymentProvider implements PaymentProvider {
    * Nothing ever pays a fake session, so it only knows two of the three states:
    * a session it issued is open, anything else is gone. `completed` is
    * unreachable here — which is precisely why the double-charge window it
-   * guards against is only exercisable against the Stripe adapter.
+   * guards against is only exercisable against the real adapters.
    */
   getPayment(providerRef: string): Promise<SessionLookup> {
     const session = this.sessions.get(providerRef);
@@ -105,7 +157,7 @@ export class FakePaymentProvider implements PaymentProvider {
   /**
    * No signature to check — the body IS the domain event, so a developer can
    * drive the webhook with curl. The shape is still validated, so the route's
-   * 400 path stays reachable without Stripe.
+   * 400 path stays reachable without real gateways.
    */
   parseEvent(rawBody: Buffer): PaymentEvent {
     const parsed: unknown = JSON.parse(rawBody.toString('utf8'));
@@ -132,3 +184,10 @@ export class FakePaymentProvider implements PaymentProvider {
     };
   }
 }
+
+/** Exported for use in tests that need to build a method-aware fake session. */
+export const FAKE_PAYMENT_METHODS: PaymentMethod[] = [
+  'PIX',
+  'CREDIT_CARD',
+  'STRIPE',
+];
