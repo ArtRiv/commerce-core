@@ -56,6 +56,8 @@ model Product {
   /// point at a VARIANT, so there is no cartItems back-relation here.
   orderItems OrderItem[]
 
+  marketplaceMappings MarketplaceItemMapping[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

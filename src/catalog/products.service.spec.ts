@@ -69,6 +69,7 @@ function createPrismaMock() {
         .fn<Promise<{ id: string; label?: string } | null>, [unknown]>()
         .mockResolvedValue(null),
       findMany: jest.fn<Promise<unknown[]>, [unknown]>().mockResolvedValue([]),
+      count: jest.fn<Promise<number>, [unknown]>().mockResolvedValue(0),
       create: jest.fn<Promise<unknown>, [unknown]>().mockResolvedValue({}),
       update: jest.fn<Promise<unknown>, [unknown]>().mockResolvedValue({}),
       delete: jest.fn<Promise<unknown>, [unknown]>().mockResolvedValue({}),
@@ -656,11 +657,46 @@ describe('ProductsService', () => {
       // Alphabetically this list is G, GG, M, P, XGG - which is why position
       // exists and why it is never derived from the label.
       expect(args.data.variants.create).toEqual([
-        { label: 'P', position: 0, stockQuantity: 0 },
-        { label: 'M', position: 1, stockQuantity: 4 },
-        { label: 'G', position: 2, stockQuantity: 0 },
-        { label: 'GG', position: 3, stockQuantity: 0 },
-        { label: 'XGG', position: 4, stockQuantity: 0 },
+        {
+          label: 'P',
+          position: 0,
+          stockQuantity: 0,
+          heightCm: null,
+          widthCm: null,
+          lengthCm: null,
+        },
+        {
+          label: 'M',
+          position: 1,
+          stockQuantity: 4,
+          heightCm: null,
+          widthCm: null,
+          lengthCm: null,
+        },
+        {
+          label: 'G',
+          position: 2,
+          stockQuantity: 0,
+          heightCm: null,
+          widthCm: null,
+          lengthCm: null,
+        },
+        {
+          label: 'GG',
+          position: 3,
+          stockQuantity: 0,
+          heightCm: null,
+          widthCm: null,
+          lengthCm: null,
+        },
+        {
+          label: 'XGG',
+          position: 4,
+          stockQuantity: 0,
+          heightCm: null,
+          widthCm: null,
+          lengthCm: null,
+        },
       ]);
     });
 
@@ -725,6 +761,9 @@ describe('ProductsService', () => {
         label: 'G',
         position: 2,
         stockQuantity: 0,
+        heightCm: null,
+        widthCm: null,
+        lengthCm: null,
       });
 
       prisma.productVariant.findFirst.mockResolvedValue({ id: 'v2' });
@@ -1045,6 +1084,113 @@ describe('ProductsService', () => {
 
       await expect(
         serviceWith(prisma).removeVariant('product-1', 'someone-elses', KEEP),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('updateVariant', () => {
+    it('updates label and dimensions, and returns the product', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst
+        .mockResolvedValueOnce({ id: 'v1', label: 'P' })
+        .mockResolvedValueOnce(null);
+      prisma.product.findUnique.mockResolvedValue(productRow());
+
+      await serviceWith(prisma).updateVariant('product-1', 'v1', {
+        label: 'PP',
+        heightCm: 10,
+        widthCm: 20,
+        lengthCm: 30,
+      });
+
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'v1' },
+        data: {
+          label: 'PP',
+          heightCm: 10,
+          widthCm: 20,
+          lengthCm: 30,
+        },
+      });
+    });
+
+    it('404s when variant does not belong to product', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValue(null);
+
+      await expect(
+        serviceWith(prisma).updateVariant('product-1', 'v1', { label: 'X' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('409s when new label clashes with another variant', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst
+        .mockResolvedValueOnce({ id: 'v1', label: 'P' })
+        .mockResolvedValueOnce({ id: 'v2', label: 'M' });
+
+      await expect(
+        serviceWith(prisma).updateVariant('product-1', 'v1', { label: 'M' }),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('archiveVariant', () => {
+    it('archives variant when product has more than one active variant', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValue({ id: 'v1' });
+      prisma.productVariant.count.mockResolvedValue(2);
+      prisma.product.findUnique.mockResolvedValue(productRow());
+
+      await serviceWith(prisma).archiveVariant('product-1', 'v1');
+
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'v1' },
+        data: { isArchived: true },
+      });
+    });
+
+    it('409s if product has only one active variant', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValue({ id: 'v1' });
+      prisma.productVariant.count.mockResolvedValue(1);
+
+      await expect(
+        serviceWith(prisma).archiveVariant('product-1', 'v1'),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.productVariant.update).not.toHaveBeenCalled();
+    });
+
+    it('404s if variant does not belong to product', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValue(null);
+
+      await expect(
+        serviceWith(prisma).archiveVariant('product-1', 'v1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('unarchiveVariant', () => {
+    it('sets isArchived to false', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValue({ id: 'v1' });
+      prisma.product.findUnique.mockResolvedValue(productRow());
+
+      await serviceWith(prisma).unarchiveVariant('product-1', 'v1');
+
+      expect(prisma.productVariant.update).toHaveBeenCalledWith({
+        where: { id: 'v1' },
+        data: { isArchived: false },
+      });
+    });
+
+    it('404s if variant does not belong to product', async () => {
+      const prisma = createPrismaMock();
+      prisma.productVariant.findFirst.mockResolvedValue(null);
+
+      await expect(
+        serviceWith(prisma).unarchiveVariant('product-1', 'v1'),
       ).rejects.toThrow(NotFoundException);
     });
   });

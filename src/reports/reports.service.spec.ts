@@ -252,6 +252,35 @@ describe('ReportsService', () => {
       );
     });
 
+    it('calculates totals across all buckets', async () => {
+      const prisma = createPrismaMock();
+      prisma.$queryRaw.mockResolvedValueOnce([
+        {
+          periodStart: '2026-08-01',
+          revenueCents: 59920n,
+          itemsSubtotalCents: 55930n,
+          shippingCents: 3990n,
+          orderCount: 4n,
+        },
+        {
+          periodStart: '2026-08-08',
+          revenueCents: 20000n,
+          itemsSubtotalCents: 18000n,
+          shippingCents: 2000n,
+          orderCount: 1n,
+        },
+      ]);
+
+      const report = await serviceWith(prisma).revenue(WINDOW);
+
+      expect(report.totals).toEqual({
+        revenueCents: 79920,
+        itemsSubtotalCents: 73930,
+        shippingCents: 5990,
+        orderCount: 5,
+      });
+    });
+
     /** A bar chart that skips the bad week draws a store that was closed. */
     it('builds the series from the calendar, so quiet weeks are zeros', async () => {
       const prisma = createPrismaMock();

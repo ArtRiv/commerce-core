@@ -149,11 +149,20 @@ function createPrismaMock() {
         .mockResolvedValue(orderRow()),
       findMany: jest.fn<Promise<OrderRow[]>, [unknown]>().mockResolvedValue([]),
       count: jest.fn<Promise<number>, [unknown]>().mockResolvedValue(0),
+      groupBy: jest
+        .fn<
+          Promise<{ status: OrderStatus; _count: { id: number } }[]>,
+          [unknown]
+        >()
+        .mockResolvedValue([]),
     },
     orderItem: {
       findMany: jest
         .fn<Promise<{ variantId: string; quantity: number }[]>, [unknown]>()
         .mockResolvedValue([]),
+    },
+    productVariant: {
+      findMany: jest.fn<Promise<any[]>, [unknown]>().mockResolvedValue([]),
     },
   };
 
@@ -263,6 +272,9 @@ type StockMock = ReturnType<typeof createStockMock>;
 type PaymentsMock = ReturnType<typeof createPaymentsMock>;
 type ShippingMock = ReturnType<typeof createShippingProviderMock>;
 type NotificationsMock = ReturnType<typeof createNotificationsMock>;
+type ErpMock = { exportOrder: jest.Mock };
+type ShippingLabelMock = { purchase: jest.Mock };
+type ConfigMock = { get: jest.Mock };
 
 interface Mocks {
   prisma: PrismaMock;
@@ -271,6 +283,34 @@ interface Mocks {
   payments: PaymentsMock;
   shipping: ShippingMock;
   notifications: NotificationsMock;
+  erp: ErpMock;
+  shippingLabel: ShippingLabelMock;
+  config: ConfigMock;
+}
+
+function createErpMock(): ErpMock {
+  return { exportOrder: jest.fn().mockResolvedValue({ erpOrderId: 'noop' }) };
+}
+
+function createShippingLabelMock(): ShippingLabelMock {
+  return {
+    purchase: jest.fn().mockResolvedValue({
+      melhorEnvioShipmentId: 'ship-1',
+      trackingCode: 'BR123456789BR',
+      labelUrl: 'https://melhorenvio.com.br/labels/ship-1.pdf',
+    }),
+  };
+}
+
+function createConfigMock(): ConfigMock {
+  return {
+    get: jest.fn().mockImplementation((key: string) => {
+      if (key === 'MELHOR_ENVIO_ORIGIN_CEP') return '01001000';
+      if (key === 'MELHOR_ENVIO_FROM_NAME') return 'Avesso Store';
+      if (key === 'MELHOR_ENVIO_FROM_PHONE') return '11999999999';
+      return undefined;
+    }),
+  };
 }
 
 function createMocks(): Mocks {
@@ -281,6 +321,9 @@ function createMocks(): Mocks {
     payments: createPaymentsMock(),
     shipping: createShippingProviderMock(),
     notifications: createNotificationsMock(),
+    erp: createErpMock(),
+    shippingLabel: createShippingLabelMock(),
+    config: createConfigMock(),
   };
 }
 
@@ -291,7 +334,20 @@ function serviceWith({
   payments,
   shipping,
   notifications,
-}: Mocks) {
+  erp = createErpMock(),
+  shippingLabel = createShippingLabelMock(),
+  config = createConfigMock(),
+}: Partial<Mocks> & {
+  prisma: PrismaMock;
+  products: ProductsMock;
+  stock: StockMock;
+  payments: PaymentsMock;
+  shipping: ShippingMock;
+  notifications: NotificationsMock;
+  erp?: ErpMock;
+  shippingLabel?: ShippingLabelMock;
+  config?: ConfigMock;
+}) {
   return new OrdersService(
     prisma as unknown as PrismaService,
     products as unknown as ProductsService,
@@ -304,6 +360,9 @@ function serviceWith({
       DEFAULT_WEIGHT_GRAMS,
     ),
     notifications as unknown as OrderNotificationsService,
+    erp,
+    shippingLabel,
+    config as any,
   );
 }
 
@@ -323,7 +382,13 @@ function muteLogger() {
 }
 
 function userWith(permissions: Permission[] = []): AuthenticatedUser {
-  return { id: 'user-1', role: 'customer', permissions: new Set(permissions) };
+  return {
+    id: 'user-1',
+    email: 'user-1@example.com',
+    name: 'User 1',
+    role: 'customer',
+    permissions: new Set(permissions),
+  };
 }
 
 /**
@@ -647,12 +712,18 @@ describe('OrdersService', () => {
             quantity: 2,
             unitPriceCents: 1000,
             weightGrams: DEFAULT_WEIGHT_GRAMS,
+            heightCm: null,
+            widthCm: null,
+            lengthCm: null,
           },
           {
             productId: 'p2',
             quantity: 1,
             unitPriceCents: 2500,
             weightGrams: DEFAULT_WEIGHT_GRAMS,
+            heightCm: null,
+            widthCm: null,
+            lengthCm: null,
           },
         ],
       });
@@ -840,7 +911,61 @@ describe('OrdersService', () => {
       ];
       expect(args.take).toBe(100);
       expect(args.skip).toBe(100);
-      expect(result).toEqual({ items: [], total: 0, page: 2, perPage: 100 });
+      expect(result).toEqual({
+        items: [],
+        total: 0,
+        page: 2,
+        perPage: 100,
+        statusCounts: {
+          all: 0,
+          CREATED: 0,
+          PAID: 0,
+          SHIPPED: 0,
+          DELIVERED: 0,
+          CANCELLED: 0,
+          REFUNDED: 0,
+        },
+      });
+    });
+
+    it('filters by search matching id, user name, and user email', async () => {
+      const mocks = createMocks();
+
+      await serviceWith(mocks).list(userWith([PERMISSIONS.ORDERS_READ]), {
+        search: 'Marina',
+      });
+
+      const [args] = mocks.prisma.order.findMany.mock.calls[0] as [
+        { where: { OR?: unknown[] } },
+      ];
+      expect(args.where.OR).toEqual([
+        { id: { contains: 'Marina', mode: 'insensitive' } },
+        { user: { name: { contains: 'Marina', mode: 'insensitive' } } },
+        { user: { email: { contains: 'Marina', mode: 'insensitive' } } },
+      ]);
+    });
+
+    it('aggregates statusCounts from groupBy', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.groupBy.mockResolvedValue([
+        { status: OrderStatus.CREATED, _count: { id: 3 } },
+        { status: OrderStatus.PAID, _count: { id: 5 } },
+      ]);
+
+      const result = await serviceWith(mocks).list(
+        userWith([PERMISSIONS.ORDERS_READ]),
+        {},
+      );
+
+      expect(result.statusCounts).toEqual({
+        all: 8,
+        CREATED: 3,
+        PAID: 5,
+        SHIPPED: 0,
+        DELIVERED: 0,
+        CANCELLED: 0,
+        REFUNDED: 0,
+      });
     });
   });
 
@@ -1536,6 +1661,25 @@ describe('OrdersService', () => {
       );
     });
 
+    it.each([
+      [OrderStatus.DELIVERED, 'ship'],
+      [OrderStatus.DELIVERED, 'markPaid'],
+      [OrderStatus.CANCELLED, 'ship'],
+      [OrderStatus.CANCELLED, 'deliver'],
+      [OrderStatus.CANCELLED, 'markPaid'],
+      [OrderStatus.REFUNDED, 'ship'],
+      [OrderStatus.REFUNDED, 'deliver'],
+      [OrderStatus.REFUNDED, 'markPaid'],
+    ] as const)('409s when %s order attempts %s', async (status, method) => {
+      const mocks = createMocks();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 0 });
+      mocks.prisma.order.findUnique.mockResolvedValue(orderRow({ status }));
+
+      await expect(serviceWith(mocks)[method]('order-1')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
     it('stamps tracking details when shipping with them', async () => {
       const mocks = createMocks();
 
@@ -1762,6 +1906,165 @@ describe('OrdersService', () => {
         ).rejects.toThrow(ConflictException);
         expect(mocks.notifications.orderCancelled).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('Bling ERP export on markPaid', () => {
+    it('exports to Bling and saves blingOrderId when exportOrder succeeds', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ id: 'order-1', status: OrderStatus.PAID }),
+      );
+      mocks.erp.exportOrder.mockResolvedValue({ erpOrderId: 'bling-12345' });
+
+      await serviceWith(mocks).markPaid('order-1');
+
+      expect(mocks.erp.exportOrder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'order-1',
+          totalCents: expect.any(Number),
+        }),
+      );
+      expect(mocks.prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'order-1' },
+        data: expect.objectContaining({
+          blingOrderId: 'bling-12345',
+          blingExportedAt: expect.any(Date),
+        }),
+      });
+    });
+
+    it('does not save blingOrderId when erp returns noop', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ id: 'order-1', status: OrderStatus.PAID }),
+      );
+      mocks.erp.exportOrder.mockResolvedValue({ erpOrderId: 'noop' });
+
+      await serviceWith(mocks).markPaid('order-1');
+
+      expect(mocks.prisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it('logs error and does not throw when Bling export fails', async () => {
+      const mocks = createMocks();
+      muteLogger();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ id: 'order-1', status: OrderStatus.PAID }),
+      );
+      mocks.erp.exportOrder.mockRejectedValue(new Error('Bling down'));
+
+      await expect(
+        serviceWith(mocks).markPaid('order-1'),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('purchaseLabel', () => {
+    it('purchases label via provider and transitions order to SHIPPED', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findUnique.mockResolvedValue({
+        ...orderRow({ id: 'order-1', status: OrderStatus.PAID }),
+        items: [
+          {
+            productId: 'p1',
+            productName: 'Camiseta',
+            variantId: 'v1',
+            variantLabel: 'M',
+            quantity: 1,
+            unitPriceCents: 5000,
+          },
+        ],
+      });
+      mocks.prisma.productVariant.findMany.mockResolvedValue([
+        {
+          id: 'v1',
+          heightCm: 10,
+          widthCm: 15,
+          lengthCm: 20,
+          product: { weightGrams: 500 },
+        },
+      ]);
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+
+      await serviceWith(mocks).purchaseLabel('order-1', 'melhorenvio.1');
+
+      expect(mocks.shippingLabel.purchase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: 'order-1',
+          serviceCode: 'melhorenvio.1',
+        }),
+      );
+      expect(mocks.prisma.order.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: OrderStatus.SHIPPED,
+            trackingCode: 'BR123456789BR',
+            labelUrl: 'https://melhorenvio.com.br/labels/ship-1.pdf',
+          }),
+        }),
+      );
+      expect(mocks.notifications.orderShipped).toHaveBeenCalledWith('order-1');
+    });
+
+    it('rejects with ConflictException if order is not PAID', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findUnique.mockResolvedValue({
+        ...orderRow({ id: 'order-1', status: OrderStatus.CREATED }),
+        items: [],
+      });
+
+      await expect(
+        serviceWith(mocks).purchaseLabel('order-1', 'melhorenvio.1'),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('quoteForOrder', () => {
+    it('quotes freight for an existing order by calculating lines from items', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.findUnique.mockResolvedValue({
+        ...orderRow({ id: 'order-1' }),
+        shippingPostalCode: '80000000',
+        items: [
+          {
+            productId: 'p1',
+            productName: 'Camiseta',
+            variantId: 'v1',
+            variantLabel: 'M',
+            quantity: 2,
+            unitPriceCents: 2000,
+          },
+        ],
+      } as any);
+      mocks.prisma.productVariant.findMany.mockResolvedValue([
+        {
+          id: 'v1',
+          heightCm: 5,
+          widthCm: 10,
+          lengthCm: 15,
+          product: { weightGrams: 300 },
+        },
+      ]);
+
+      await serviceWith(mocks).quoteForOrder('order-1');
+
+      expect(mocks.shipping.quote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          destination: { postalCode: '80000000' },
+          items: [
+            expect.objectContaining({
+              productId: 'p1',
+              quantity: 2,
+              unitPriceCents: 2000,
+              weightGrams: 300,
+            }),
+          ],
+        }),
+      );
     });
   });
 });

@@ -37,8 +37,17 @@ model ProductVariant {
   /// settled by Postgres.
   stockQuantity Int @default(0) @map("stock_quantity")
 
-  cartItems  CartItem[]
-  orderItems OrderItem[]
+  /// Physical dimensions in centimetres, for cubic freight calculation.
+  heightCm Int? @map("height_cm")
+  widthCm  Int? @map("width_cm")
+  lengthCm Int? @map("length_cm")
+
+  /// Archiving removes the variant from storefront and sales while preserving order history.
+  isArchived Boolean @default(false) @map("is_archived")
+
+  cartItems           CartItem[]
+  orderItems          OrderItem[]
+  marketplaceMappings MarketplaceItemMapping[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

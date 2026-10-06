@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 
 import type { Prisma } from '../generated/prisma/client';
 import { ProductStatus } from '../generated/prisma/enums';
@@ -76,8 +80,8 @@ export class StockService {
     if (!Number.isInteger(quantity) || quantity <= 0) {
       // Caller bug, not user input: quantities reach here already validated.
       // A zero or negative "decrement" would silently mint stock.
-      throw new Error(
-        `decrement quantity must be a positive integer, got ${String(quantity)}`,
+      throw new InternalServerErrorException(
+        `Erro de programação: quantidade de decremento deve ser inteiro positivo, recebido ${String(quantity)}`,
       );
     }
 
@@ -86,6 +90,7 @@ export class StockService {
         id: variantId,
         stockQuantity: { gte: quantity },
         product: { status: ProductStatus.ACTIVE },
+        isArchived: false,
       },
       data: { stockQuantity: { decrement: quantity } },
     });
@@ -111,8 +116,8 @@ export class StockService {
   ): Promise<void> {
     if (!Number.isInteger(quantity) || quantity <= 0) {
       // Same reasoning as decrement: a zero or negative restock is a bug.
-      throw new Error(
-        `restock quantity must be a positive integer, got ${String(quantity)}`,
+      throw new InternalServerErrorException(
+        `Erro de programação: quantidade de reestoque deve ser inteiro positivo, recebido ${String(quantity)}`,
       );
     }
 
@@ -122,7 +127,9 @@ export class StockService {
     });
 
     if (count !== 1) {
-      throw new Error(`restock hit a missing product variant: ${variantId}`);
+      throw new InternalServerErrorException(
+        `Variante não encontrada ao restaurar estoque: ${variantId}`,
+      );
     }
   }
 }

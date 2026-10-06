@@ -25,6 +25,47 @@ export const CHECKOUT_MODES = ['hosted', 'embedded'] as const;
 
 export type CheckoutMode = (typeof CHECKOUT_MODES)[number];
 
+/**
+ * The payment method chosen at checkout. Determines which underlying gateway
+ * handles the transaction in the hybrid routing layer.
+ *
+ * `PIX` — instant bank transfer, routed to Asaas (flat fee per transaction).
+ * `CREDIT_CARD` — card with up to 12x installments, routed to Mercado Pago.
+ * `STRIPE` — Stripe Checkout (fallback / explicit override).
+ */
+export const PAYMENT_METHODS = ['PIX', 'CREDIT_CARD', 'STRIPE'] as const;
+
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+/**
+ * The PIX credentials returned after charging, needed for the buyer to pay.
+ *
+ * Both `payload` (the EMV Copia e Cola string) and `encodedImage` (the
+ * base64 PNG of the dynamic QR Code) are served to the frontend so the
+ * order page can render the QR directly without a second network round-trip.
+ * `encodedImage` is nullable because some providers return the image URL
+ * separately or on a follow-up call.
+ */
+export interface PixDetails {
+  /** The EMV-standard Copia e Cola text string the buyer pastes into their bank. */
+  payload: string;
+  /** Base64-encoded PNG of the QR Code, ready for `<img src="...">`. Null when not yet available. */
+  encodedImage: string | null;
+  expirationDate: Date;
+}
+
+/**
+ * Minimal buyer data some national gateways require to create or match a
+ * customer record. All fields are optional — their absence falls through to
+ * whatever the gateway allows without them.
+ */
+export interface PaymentBuyer {
+  name?: string | null;
+  email: string;
+  /** CPF or CNPJ — required by Asaas for PIX customer creation. */
+  document?: string | null;
+}
+
 export interface PaymentSession {
   /** The session reference to store on the order (cs_… on Stripe). */
   providerRef: string;
@@ -37,6 +78,16 @@ export interface PaymentSession {
    */
   clientSecret: string | null;
   expiresAt: Date;
+  /**
+   * Populated when `method === 'PIX'`. Contains the QR Code image and the
+   * Copia e Cola EMV payload. Null for card or Stripe sessions.
+   */
+  pix?: PixDetails | null;
+  /**
+   * Which gateway handled this session. Carried through so the orders layer
+   * can persist it to the order without having to parse the providerRef prefix.
+   */
+  method?: PaymentMethod;
 }
 
 /**
@@ -82,6 +133,10 @@ export interface CreatePaymentInput {
   amountCents: number;
   /** Falls back to the provider's configured default. */
   mode?: CheckoutMode;
+  /** Which payment method to use. The hybrid router uses this to select the gateway. */
+  method?: PaymentMethod;
+  /** Buyer details — required by national gateways for customer creation / fraud checks. */
+  buyer?: PaymentBuyer;
 }
 
 /**

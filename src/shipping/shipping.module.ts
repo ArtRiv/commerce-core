@@ -1,6 +1,9 @@
 import { Logger, Module, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { CepService } from './cep.service';
+import { HybridShippingProvider } from './hybrid-shipping.provider';
+import { MelhorEnvioShippingProvider } from './melhor-envio-shipping.provider';
 import {
   SHIPPING_DEFAULT_WEIGHT_GRAMS,
   SHIPPING_PROVIDER,
@@ -23,6 +26,9 @@ const CONFIGURED_TABLE_REQUIRED_UNLESS = new Set(['development', 'test']);
 
 /** What a product with no weight of its own is assumed to weigh. */
 const FALLBACK_WEIGHT_GRAMS = 500;
+
+/** Melhor Envio production API base URL. */
+const MELHOR_ENVIO_BASE_URL = 'https://melhorenvio.com.br/api';
 
 export function resolveShippingTable(
   config: ConfigService,
@@ -93,14 +99,103 @@ export function resolveDefaultWeightGrams(config: ConfigService): number {
   return parsed;
 }
 
+/**
+ * Resolves the concrete ShippingProvider to bind to the SHIPPING_PROVIDER token.
+ *
+ * - MELHOR_ENVIO_TOKEN set → HybridShippingProvider (Melhor Envio primary +
+ *   TableShippingProvider fallback). Both MELHOR_ENVIO_TOKEN and
+ *   MELHOR_ENVIO_ORIGIN_CEP must be present; one without the other refuses boot,
+ *   same logic as the payment gateways.
+ * - MELHOR_ENVIO_TOKEN absent in development/test → TableShippingProvider with
+ *   a warning.
+ * - MELHOR_ENVIO_TOKEN absent in production → boot failure.
+ */
+export function resolveShippingProvider(
+  config: ConfigService,
+): ShippingProvider {
+  const token = config.get<string>('MELHOR_ENVIO_TOKEN')?.trim();
+  const originCep = config.get<string>('MELHOR_ENVIO_ORIGIN_CEP')?.trim();
+  const environment = config.get<string>('NODE_ENV')?.trim().toLowerCase();
+  const baseUrl =
+    config.get<string>('MELHOR_ENVIO_BASE_URL')?.trim() ??
+    MELHOR_ENVIO_BASE_URL;
+
+  const table = resolveShippingTable(config);
+  const freeAbove = resolveFreeAboveCents(config);
+  const tableProvider = new TableShippingProvider(table, freeAbove);
+
+  if (token && originCep) {
+    const me = new MelhorEnvioShippingProvider(token, originCep, baseUrl);
+    new Logger('ShippingModule').log(
+      `Usando Melhor Envio para cotações em tempo real (origem: ${originCep}).`,
+    );
+    return new HybridShippingProvider(me, tableProvider);
+  }
+
+  if (token && !originCep) {
+    throw new Error(
+      'MELHOR_ENVIO_TOKEN está configurado mas MELHOR_ENVIO_ORIGIN_CEP está ausente. ' +
+        'O CEP de origem é obrigatório para cotação de frete — configure-o com o CEP do seu centro de distribuição.',
+    );
+  }
+
+  // No token — allow in dev/test, fail in production.
+  const isDev = environment === 'development' || environment === 'test';
+
+  if (!isDev) {
+    throw new Error(
+      'MELHOR_ENVIO_TOKEN é obrigatório em produção. ' +
+        'Configure o token de acesso do Melhor Envio ou defina NODE_ENV como development para usar a tabela offline.',
+    );
+  }
+
+  new Logger('ShippingModule').warn(
+    'MELHOR_ENVIO_TOKEN não configurado — usando tabela de frete offline (desenvolvimento). ' +
+      'Preços são placeholders e não devem ser cobrados de clientes reais.',
+  );
+  return tableProvider;
+}
+
+import { FakeShippingLabelService } from './fake-shipping-label.service';
+import {
+  SHIPPING_LABEL_SERVICE,
+  type ShippingLabelProvider,
+  ShippingLabelService,
+} from './shipping-label.service';
+
+export function resolveShippingLabelService(
+  config: ConfigService,
+): ShippingLabelProvider {
+  const token = config.get<string>('MELHOR_ENVIO_TOKEN')?.trim();
+  const environment = config.get<string>('NODE_ENV')?.trim().toLowerCase();
+  const baseUrl =
+    config.get<string>('MELHOR_ENVIO_BASE_URL')?.trim() ??
+    MELHOR_ENVIO_BASE_URL;
+
+  if (token) {
+    return new ShippingLabelService(token, baseUrl);
+  }
+
+  const isDev = environment === 'development' || environment === 'test';
+  if (!isDev) {
+    throw new Error(
+      'MELHOR_ENVIO_TOKEN é obrigatório em produção para geração de etiquetas.',
+    );
+  }
+
+  return new FakeShippingLabelService();
+}
+
+const shippingLabelServiceProvider: Provider = {
+  provide: SHIPPING_LABEL_SERVICE,
+  inject: [ConfigService],
+  useFactory: resolveShippingLabelService,
+};
+
 const shippingProvider: Provider = {
   provide: SHIPPING_PROVIDER,
   inject: [ConfigService],
-  useFactory: (config: ConfigService): ShippingProvider =>
-    new TableShippingProvider(
-      resolveShippingTable(config),
-      resolveFreeAboveCents(config),
-    ),
+  useFactory: resolveShippingProvider,
 };
 
 const defaultWeightGrams: Provider = {
@@ -110,22 +205,25 @@ const defaultWeightGrams: Provider = {
 };
 
 /**
- * Owns freight pricing and nothing else (docs/architecture/modules.md): the
- * ShippingProvider token with an adapter behind it, same shape as `payments`
- * and `mail`.
+ * Owns freight pricing and label purchasing (docs/architecture/modules.md): the
+ * ShippingProvider and ShippingLabelProvider tokens with adapters behind them.
  *
- * A leaf of the module graph, and it has to stay one. It knows nothing about
- * carts, orders or products — orders reads the cart, resolves weights through
- * the catalog contract it already uses, and hands this module a request that
- * is complete. That is what keeps the arrow orders → shipping pointing one
- * way, and it is why the quote CONTROLLER lives in orders despite serving
- * /shipping/quote, exactly as the payment webhook does.
- *
- * Not @Global, for the same reason payments is not: only orders prices
- * freight, and importing the module is what keeps that visible in the graph.
+ * In production, resolves to HybridShippingProvider (Melhor Envio primary +
+ * table fallback) and ShippingLabelService. In development without MELHOR_ENVIO_TOKEN,
+ * uses the table and fake label service.
  */
 @Module({
-  providers: [shippingProvider, defaultWeightGrams],
-  exports: [SHIPPING_PROVIDER, SHIPPING_DEFAULT_WEIGHT_GRAMS],
+  providers: [
+    shippingProvider,
+    defaultWeightGrams,
+    shippingLabelServiceProvider,
+    CepService,
+  ],
+  exports: [
+    SHIPPING_PROVIDER,
+    SHIPPING_DEFAULT_WEIGHT_GRAMS,
+    SHIPPING_LABEL_SERVICE,
+    CepService,
+  ],
 })
 export class ShippingModule {}

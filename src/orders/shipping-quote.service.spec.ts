@@ -42,6 +42,10 @@ function cartItem(
       label: 'M',
       position: 1,
       stockQuantity: 10,
+      heightCm: null,
+      widthCm: null,
+      lengthCm: null,
+      isArchived: false,
     },
   };
 }
@@ -106,6 +110,9 @@ describe('ShippingQuoteService', () => {
             quantity: 2,
             unitPriceCents: 1_000,
             weightGrams: 300,
+            heightCm: null,
+            widthCm: null,
+            lengthCm: null,
           },
           {
             productId: 'p2',
@@ -113,6 +120,9 @@ describe('ShippingQuoteService', () => {
             unitPriceCents: 2_500,
             // The unweighed product resolves before the boundary.
             weightGrams: DEFAULT_WEIGHT_GRAMS,
+            heightCm: null,
+            widthCm: null,
+            lengthCm: null,
           },
         ],
       });
