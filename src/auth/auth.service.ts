@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -11,11 +12,13 @@ import { JwtService } from '@nestjs/jwt';
 import { VerificationTokenPurpose } from '../generated/prisma/enums';
 import { MAIL_SERVICE, type MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveEffectivePermissions } from './authz/role-permissions';
 import type { LoginDto } from './dto/login.dto';
 import type { RegisterDto } from './dto/register.dto';
 import { normalizeEmail } from './normalize-email';
 import { PasswordService } from './password.service';
 import { RefreshTokenService } from './refresh-token.service';
+import type { CurrentUserResponse } from './responses/current-user.response';
 import type { TokenPair } from './token-pair';
 import { VerificationTokenService } from './verification-token.service';
 
@@ -73,7 +76,9 @@ export class AuthService {
     });
 
     if (!role) {
-      throw new Error('No default role configured — did the seed run?');
+      throw new InternalServerErrorException(
+        'Nenhum papel padrão configurado — execute o seed do banco de dados.',
+      );
     }
 
     // emailVerifiedAt is left unset: registering proves nothing about owning
@@ -281,7 +286,9 @@ export class AuthService {
     });
 
     if (!role) {
-      throw new Error('No default role configured — did the seed run?');
+      throw new InternalServerErrorException(
+        'Nenhum papel padrão configurado — execute o seed do banco de dados.',
+      );
     }
 
     // No passwordHash: this account has never had one. Verified on the spot —
@@ -311,6 +318,45 @@ export class AuthService {
 
   async logout(userId: string, presented: string): Promise<void> {
     await this.refreshTokens.revokeSession(userId, presented);
+  }
+
+  async getCurrentUser(userId: string): Promise<CurrentUserResponse> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        role: {
+          select: {
+            name: true,
+            permissions: { select: { permission: { select: { key: true } } } },
+          },
+        },
+        permissionsGrantedToUser: {
+          select: { permission: { select: { key: true } } },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const permissions = resolveEffectivePermissions(
+      user.role.permissions.map((rp) => rp.permission.key),
+      user.permissionsGrantedToUser.map((up) => up.permission.key),
+    );
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role.name,
+      permissions: Array.from(permissions),
+      createdAt: user.createdAt,
+    };
   }
 
   /**

@@ -33,6 +33,12 @@ export const PERMISSIONS = {
    * somebody choosing a permission to hand out will actually read it.
    */
   STAFF_MANAGE: 'staff.manage',
+
+  /**
+   * Read and manage external multi-tenant marketplace integrations (Mercado Livre, etc.).
+   */
+  INTEGRATIONS_READ: 'integrations.read',
+  INTEGRATIONS_MANAGE: 'integrations.manage',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
