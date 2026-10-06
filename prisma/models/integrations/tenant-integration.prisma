@@ -1,0 +1,19 @@
+/// Credenciais e estado de conexão com marketplaces e provedores externos
+/// particionados por tenant.
+///
+/// As credenciais (tokens OAuth de acesso e atualização) são mantidas
+/// estritamente criptografadas em repouso com algoritmo AES-256-GCM.
+model TenantIntegration {
+  id                   String    @id @default(uuid())
+  tenantId             String    @default("default") @map("tenant_id")
+  provider             String    @map("provider")
+  credentialsEncrypted String    @map("credentials_encrypted")
+  status               String    @default("ACTIVE") @map("status")
+  expiresAt            DateTime? @map("expires_at")
+  metadata             Json?     @map("metadata")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@unique([tenantId, provider])
+  @@map("tenant_integrations")
+}
