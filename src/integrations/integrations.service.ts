@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { AmazonAuthService } from './amazon/amazon-auth.service';
+import { AmazonDppService } from './amazon/amazon-dpp.service';
+import { AmazonSyncService } from './amazon/amazon-sync.service';
+import { AmazonWebhookService } from './amazon/amazon-webhook.service';
 import { MercadoLivreAuthService } from './mercadolivre/mercadolivre-auth.service';
 import { MercadoLivreSyncService } from './mercadolivre/mercadolivre-sync.service';
 import { MercadoLivreWebhookService } from './mercadolivre/mercadolivre-webhook.service';
@@ -26,6 +30,10 @@ export class IntegrationsService {
     public readonly shopeeAuth: ShopeeAuthService,
     public readonly shopeeSync: ShopeeSyncService,
     public readonly shopeeWebhook: ShopeeWebhookService,
+    public readonly amazonAuth: AmazonAuthService,
+    public readonly amazonSync: AmazonSyncService,
+    public readonly amazonWebhook: AmazonWebhookService,
+    public readonly amazonDpp: AmazonDppService,
   ) {}
 
   /**
@@ -40,6 +48,7 @@ export class IntegrationsService {
 
     const meliRow = existing.find((i) => i.provider === 'MERCADO_LIVRE');
     const shopeeRow = existing.find((i) => i.provider === 'SHOPEE');
+    const amazonRow = existing.find((i) => i.provider === 'AMAZON');
 
     const integrations: IntegrationItemResponse[] = [
       {
@@ -60,6 +69,17 @@ export class IntegrationsService {
           : null,
         metadata:
           (shopeeRow?.metadata as Record<string, unknown> | null) ?? null,
+      },
+      {
+        provider: 'AMAZON',
+        connected: amazonRow?.status === 'ACTIVE',
+        status: (amazonRow ? amazonRow.status : 'DISCONNECTED') as
+          'ACTIVE' | 'DISCONNECTED' | 'ERROR',
+        expiresAt: amazonRow?.expiresAt
+          ? amazonRow.expiresAt.toISOString()
+          : null,
+        metadata:
+          (amazonRow?.metadata as Record<string, unknown> | null) ?? null,
       },
     ];
 
@@ -105,6 +125,17 @@ export class IntegrationsService {
    */
   async syncShopeeCatalog(tenantId = 'default'): Promise<CatalogSyncResponse> {
     const result = await this.shopeeSync.syncAllCatalog(tenantId);
+    return {
+      syncedProducts: result.syncedProducts,
+      totalVariants: result.totalVariants,
+    };
+  }
+
+  /**
+   * Dispara sincronização completa de catálogo com a Amazon SP-API.
+   */
+  async syncAmazonCatalog(tenantId = 'default'): Promise<CatalogSyncResponse> {
+    const result = await this.amazonSync.syncAllCatalog(tenantId);
     return {
       syncedProducts: result.syncedProducts,
       totalVariants: result.totalVariants,

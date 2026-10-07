@@ -21,6 +21,7 @@ import {
 } from '../erp/erp-service';
 import type { Prisma } from '../generated/prisma/client';
 import { OrderStatus, ProductStatus } from '../generated/prisma/enums';
+import { AmazonSyncService } from '../integrations/amazon/amazon-sync.service';
 import { MercadoLivreSyncService } from '../integrations/mercadolivre/mercadolivre-sync.service';
 import { ShopeeSyncService } from '../integrations/shopee/shopee-sync.service';
 import {
@@ -265,6 +266,7 @@ export class OrdersService {
     private readonly config: ConfigService,
     @Optional() private readonly meliSync?: MercadoLivreSyncService,
     @Optional() private readonly shopeeSync?: ShopeeSyncService,
+    @Optional() private readonly amazonSync?: AmazonSyncService,
   ) {}
 
   async checkout(userId: string, input: CheckoutInput) {
@@ -411,8 +413,8 @@ export class OrdersService {
       });
     });
 
-    // Sincroniza atômica e assincronamente os saldos com marketplaces integrados (Mercado Livre e Shopee)
-    if (this.meliSync || this.shopeeSync) {
+    // Sincroniza atômica e assincronamente os saldos com marketplaces integrados (Mercado Livre, Shopee e Amazon)
+    if (this.meliSync || this.shopeeSync || this.amazonSync) {
       for (const item of created.items) {
         const variant = byId.get(item.variantId);
         const remaining = (variant?.stockQuantity ?? 0) - item.quantity;
@@ -432,6 +434,15 @@ export class OrdersService {
             .catch((err: unknown) => {
               this.logger.warn(
                 `Erro assíncrono ao sincronizar estoque com Shopee pós-checkout: ${describe(err)}`,
+              );
+            });
+        }
+        if (this.amazonSync) {
+          this.amazonSync
+            .syncVariantStock(item.variantId, remainingSafe)
+            .catch((err: unknown) => {
+              this.logger.warn(
+                `Erro assíncrono ao sincronizar estoque com Amazon SP-API pós-checkout: ${describe(err)}`,
               );
             });
         }

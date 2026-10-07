@@ -4,6 +4,8 @@ import { StockService } from '../../catalog/stock.service';
 import { ERP_SERVICE, type ErpService } from '../../erp/erp-service';
 import { OrderStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AmazonSyncService } from '../amazon/amazon-sync.service';
+import { ShopeeSyncService } from '../shopee/shopee-sync.service';
 import { MercadoLivreConnector } from './mercadolivre-connector';
 
 export interface MercadoLivreWebhookPayload {
@@ -32,6 +34,8 @@ export class MercadoLivreWebhookService {
     private readonly prisma: PrismaService,
     private readonly connector: MercadoLivreConnector,
     private readonly stock: StockService,
+    @Optional() private readonly shopeeSync?: ShopeeSyncService,
+    @Optional() private readonly amazonSync?: AmazonSyncService,
     @Optional()
     @Inject(ERP_SERVICE)
     private readonly erp?: ErpService,
@@ -253,6 +257,34 @@ export class MercadoLivreWebhookService {
         include: { items: true },
       });
     });
+
+    // Cascata de estoque em tempo real para os demais canais integrados (Shopee e Amazon)
+    for (const item of orderItemsToCreate) {
+      const remainingVariant = await this.prisma.productVariant.findUnique({
+        where: { id: item.variantId },
+      });
+      const currentStock = remainingVariant?.stockQuantity ?? 0;
+
+      if (this.shopeeSync) {
+        this.shopeeSync
+          .syncVariantStock(item.variantId, currentStock, tenantId)
+          .catch((err: unknown) => {
+            this.logger.warn(
+              `Erro ao propagar baixa de estoque ML para Shopee: ${String(err)}`,
+            );
+          });
+      }
+
+      if (this.amazonSync) {
+        this.amazonSync
+          .syncVariantStock(item.variantId, currentStock, tenantId)
+          .catch((err: unknown) => {
+            this.logger.warn(
+              `Erro ao propagar baixa de estoque ML para Amazon: ${String(err)}`,
+            );
+          });
+      }
+    }
 
     // Se o pedido estiver pago e houver serviço de ERP configurado, exporta para o Bling
     if (createdOrder.status === OrderStatus.PAID && this.erp) {
