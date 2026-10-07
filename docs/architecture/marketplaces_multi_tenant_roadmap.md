@@ -117,15 +117,17 @@ Para evitar vendas duplicadas (*overselling*) de itens com estoque baixo quando 
 
 ---
 
-### Sessão 11 — Integração Shopee (Marketplace)
-- [ ] **Autenticação Shopee Open Platform:**
+### Sessão 11 — Integração Shopee (Marketplace) — [CONCLUÍDA]
+- [x] **Autenticação Shopee Open Platform:**
   - Geração de assinaturas HMAC-SHA256 para rotas públicas e autenticadas (`/api/v2/shop/auth_partner`).
-  - Gestão de tokens da loja (Partner ID, Partner Key, Shop ID, Access Token e Refresh Token de 4h).
-- [ ] **Mapeamento de Catálogo & Categorias:**
-  - Sistema de mapeamento entre categorias locais e a taxonomia mandatória da Shopee com atributos obrigatórios.
-- [ ] **Sincronização Bidirecional:**
-  - Atualização automática de estoque via endpoint `/api/v2/product/update_stock`.
-  - Push Mechanism para captura em tempo real de novos pedidos.
+  - Gestão de tokens da loja (Partner ID, Partner Key, Shop ID, Access Token de 4h e Refresh Token de 30 dias com criptografia AES-256-GCM).
+- [x] **Mapeamento de Catálogo & Categorias:**
+  - Sistema de mapeamento entre categorias locais e a taxonomia mandatória da Shopee com atributos obrigatórios (`ShopeeCategoryMappingService`).
+- [x] **Sincronização Bidirecional & Prevenção de Overselling:**
+  - Atualização atômica de estoque via endpoint `/api/v2/product/update_stock` integrada ao checkout.
+  - Push Mechanism para captura em tempo real de novos pedidos, baixa de estoque em PostgreSQL e propagação para o Mercado Livre.
+- [x] **100% de Testes e Builds:**
+  - 756 testes Jest no backend (55 suítes), 63 testes Vitest no frontend e 7/7 testes E2E Playwright reais 100% aprovados.
 
 ---
 

@@ -4372,6 +4372,245 @@
         ]
       }
     },
+    "/integrations/shopee/auth-url": {
+      "get": {
+        "operationId": "IntegrationsController_getShopeeAuthUrl",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUrlResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Gera URL de autorização Shopee Open Platform (/api/v2/shop/auth_partner) com assinatura HMAC-SHA256.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/callback": {
+      "post": {
+        "operationId": "IntegrationsController_shopeeCallback",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShopeeCallbackDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationItemResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Troca código de autorização por tokens da Shopee e ativa integração em tenant_integrations.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/disconnect": {
+      "post": {
+        "operationId": "IntegrationsController_disconnectShopee",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisconnectIntegrationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Desconecta e revoga credenciais da integração com a Shopee.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/sync": {
+      "post": {
+        "operationId": "IntegrationsController_syncShopeeCatalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSyncResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Dispara sincronização manual de catálogo e estoque para a Shopee.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/webhook": {
+      "post": {
+        "operationId": "IntegrationsController_shopeeWebhook",
+        "parameters": [
+          {
+            "name": "authorization",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShopeeWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receptor público de push mechanism/webhooks da Shopee para criação/atualização de pedidos.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/reports/product-sales": {
       "get": {
         "description": "How much of each piece left, best-selling first.\n\nA sale is an order that is `PAID`, `SHIPPED` or `DELIVERED`, timed by **`paidAt`** — when the money arrived, not when the cart froze.\n\n`CREATED` does not count: the stock left the shelf but nothing was paid, and half of those orders never are. `CANCELLED` and `REFUNDED` do not count either, and both return their units to stock — so \"units sold\" and \"stock that left the shelf\" keep saying the same thing.\n\nThe window is `[from, to)` — start inclusive, end **exclusive**, so asking for two adjacent months never counts an order twice. Both are optional: omit `to` for now, omit `from` for 30 days before `to`.\n\nRows are grouped by **product id** and named from the live catalogue, so renaming a piece mid-period does not split it into two lines. Sizes are summed together: which size to restock is a different question, and this route does not answer it.\n\n`itemsRevenueCents` is the goods alone, at the price frozen on each order line. Freight is not attributable to a piece and lives on `GET /reports/revenue`.",
@@ -7122,6 +7361,65 @@
           "topic",
           "resource",
           "user_id"
+        ]
+      },
+      "ShopeeCallbackDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Código de autorização temporário emitido pela Shopee Open Platform após consentimento.",
+            "example": "sp_auth_code_987654321"
+          },
+          "shop_id": {
+            "type": "number",
+            "description": "Identificador numérico da loja (shop_id) na Shopee.",
+            "example": 654321
+          },
+          "state": {
+            "type": "string",
+            "description": "Parâmetro state assinado com HMAC-SHA256 para prevenção de CSRF.",
+            "example": "eyJ0ZW5hbnRJZCI6ImRlZmF1bHQiLCJub25jZSI6ImFiY2RlZiIsInRpbWVzdGFtcCI6MTY5NjYwMDAwMDAwMCwic2lnIjoiMTIzNDU2In0"
+          }
+        },
+        "required": [
+          "code",
+          "shop_id"
+        ]
+      },
+      "ShopeeWebhookDto": {
+        "type": "object",
+        "properties": {
+          "shop_id": {
+            "type": "number",
+            "description": "Identificador numérico da loja (shop_id) na Shopee.",
+            "example": 654321
+          },
+          "code": {
+            "type": "number",
+            "description": "Código numérico do evento disparado pela Shopee (3 = Order Update, 2 = Item Update, 4 = Tracking Update).",
+            "example": 3
+          },
+          "timestamp": {
+            "type": "number",
+            "description": "Timestamp Unix (em segundos) do envio da notificação push.",
+            "example": 1696600000
+          },
+          "data": {
+            "type": "object",
+            "description": "Carga útil específica do evento (ex: ordersn, status, etc.).",
+            "example": {
+              "ordersn": "230928ABCDEF1234",
+              "status": "READY_TO_SHIP",
+              "update_time": 1696600000
+            }
+          }
+        },
+        "required": [
+          "shop_id",
+          "code",
+          "timestamp",
+          "data"
         ]
       },
       "ProductSalesRowResponse": {

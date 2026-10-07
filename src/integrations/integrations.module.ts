@@ -9,6 +9,11 @@ import { MercadoLivreAuthService } from './mercadolivre/mercadolivre-auth.servic
 import { MercadoLivreConnector } from './mercadolivre/mercadolivre-connector';
 import { MercadoLivreSyncService } from './mercadolivre/mercadolivre-sync.service';
 import { MercadoLivreWebhookService } from './mercadolivre/mercadolivre-webhook.service';
+import { ShopeeAuthService } from './shopee/shopee-auth.service';
+import { ShopeeCategoryMappingService } from './shopee/shopee-category-mapping.service';
+import { ShopeeConnector } from './shopee/shopee-connector';
+import { ShopeeSyncService } from './shopee/shopee-sync.service';
+import { ShopeeWebhookService } from './shopee/shopee-webhook.service';
 
 @Module({
   imports: [CatalogModule, ErpModule],
@@ -19,6 +24,11 @@ import { MercadoLivreWebhookService } from './mercadolivre/mercadolivre-webhook.
     MercadoLivreConnector,
     MercadoLivreSyncService,
     MercadoLivreWebhookService,
+    ShopeeAuthService,
+    ShopeeCategoryMappingService,
+    ShopeeConnector,
+    ShopeeSyncService,
+    ShopeeWebhookService,
     IntegrationsService,
   ],
   exports: [
@@ -27,6 +37,11 @@ import { MercadoLivreWebhookService } from './mercadolivre/mercadolivre-webhook.
     MercadoLivreConnector,
     MercadoLivreSyncService,
     MercadoLivreWebhookService,
+    ShopeeAuthService,
+    ShopeeCategoryMappingService,
+    ShopeeConnector,
+    ShopeeSyncService,
+    ShopeeWebhookService,
     IntegrationsService,
   ],
 })

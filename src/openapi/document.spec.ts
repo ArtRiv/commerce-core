@@ -66,8 +66,12 @@ const CONTROLLERS = [
  * 65 since marketplace integrations (Mercado Livre): GET /integrations, GET /integrations/mercadolivre/auth-url,
  * POST /integrations/mercadolivre/callback, POST /integrations/mercadolivre/disconnect,
  * POST /integrations/mercadolivre/sync, POST /integrations/mercadolivre/webhook.
+ *
+ * 70 since marketplace integrations (Shopee): GET /integrations/shopee/auth-url,
+ * POST /integrations/shopee/callback, POST /integrations/shopee/disconnect,
+ * POST /integrations/shopee/sync, POST /integrations/shopee/webhook.
  */
-const EXPECTED_ROUTE_COUNT = 65;
+const EXPECTED_ROUTE_COUNT = 70;
 
 const HTTP_METHOD = new Map<RequestMethod, string>([
   [RequestMethod.GET, 'get'],

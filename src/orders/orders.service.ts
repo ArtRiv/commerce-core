@@ -22,6 +22,7 @@ import {
 import type { Prisma } from '../generated/prisma/client';
 import { OrderStatus, ProductStatus } from '../generated/prisma/enums';
 import { MercadoLivreSyncService } from '../integrations/mercadolivre/mercadolivre-sync.service';
+import { ShopeeSyncService } from '../integrations/shopee/shopee-sync.service';
 import {
   type CheckoutMode,
   PAYMENT_PROVIDER,
@@ -263,6 +264,7 @@ export class OrdersService {
     private readonly shippingLabel: ShippingLabelProvider,
     private readonly config: ConfigService,
     @Optional() private readonly meliSync?: MercadoLivreSyncService,
+    @Optional() private readonly shopeeSync?: ShopeeSyncService,
   ) {}
 
   async checkout(userId: string, input: CheckoutInput) {
@@ -409,18 +411,30 @@ export class OrdersService {
       });
     });
 
-    // Sincroniza atômica e assincronamente os saldos com marketplaces integrados (Mercado Livre)
-    if (this.meliSync) {
+    // Sincroniza atômica e assincronamente os saldos com marketplaces integrados (Mercado Livre e Shopee)
+    if (this.meliSync || this.shopeeSync) {
       for (const item of created.items) {
         const variant = byId.get(item.variantId);
         const remaining = (variant?.stockQuantity ?? 0) - item.quantity;
-        this.meliSync
-          .syncVariantStock(item.variantId, Math.max(0, remaining))
-          .catch((err: unknown) => {
-            this.logger.warn(
-              `Erro assíncrono ao sincronizar estoque com marketplace pós-checkout: ${describe(err)}`,
-            );
-          });
+        const remainingSafe = Math.max(0, remaining);
+        if (this.meliSync) {
+          this.meliSync
+            .syncVariantStock(item.variantId, remainingSafe)
+            .catch((err: unknown) => {
+              this.logger.warn(
+                `Erro assíncrono ao sincronizar estoque com Mercado Livre pós-checkout: ${describe(err)}`,
+              );
+            });
+        }
+        if (this.shopeeSync) {
+          this.shopeeSync
+            .syncVariantStock(item.variantId, remainingSafe)
+            .catch((err: unknown) => {
+              this.logger.warn(
+                `Erro assíncrono ao sincronizar estoque com Shopee pós-checkout: ${describe(err)}`,
+              );
+            });
+        }
       }
     }
 

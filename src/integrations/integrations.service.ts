@@ -10,6 +10,9 @@ import type {
   IntegrationItemResponse,
   ListIntegrationsResponse,
 } from './responses/integration.response';
+import { ShopeeAuthService } from './shopee/shopee-auth.service';
+import { ShopeeSyncService } from './shopee/shopee-sync.service';
+import { ShopeeWebhookService } from './shopee/shopee-webhook.service';
 
 @Injectable()
 export class IntegrationsService {
@@ -20,6 +23,9 @@ export class IntegrationsService {
     public readonly meliAuth: MercadoLivreAuthService,
     public readonly meliSync: MercadoLivreSyncService,
     public readonly meliWebhook: MercadoLivreWebhookService,
+    public readonly shopeeAuth: ShopeeAuthService,
+    public readonly shopeeSync: ShopeeSyncService,
+    public readonly shopeeWebhook: ShopeeWebhookService,
   ) {}
 
   /**
@@ -33,6 +39,7 @@ export class IntegrationsService {
     });
 
     const meliRow = existing.find((i) => i.provider === 'MERCADO_LIVRE');
+    const shopeeRow = existing.find((i) => i.provider === 'SHOPEE');
 
     const integrations: IntegrationItemResponse[] = [
       {
@@ -42,6 +49,17 @@ export class IntegrationsService {
           'ACTIVE' | 'DISCONNECTED' | 'ERROR',
         expiresAt: meliRow?.expiresAt ? meliRow.expiresAt.toISOString() : null,
         metadata: (meliRow?.metadata as Record<string, unknown> | null) ?? null,
+      },
+      {
+        provider: 'SHOPEE',
+        connected: shopeeRow?.status === 'ACTIVE',
+        status: (shopeeRow ? shopeeRow.status : 'DISCONNECTED') as
+          'ACTIVE' | 'DISCONNECTED' | 'ERROR',
+        expiresAt: shopeeRow?.expiresAt
+          ? shopeeRow.expiresAt.toISOString()
+          : null,
+        metadata:
+          (shopeeRow?.metadata as Record<string, unknown> | null) ?? null,
       },
     ];
 
@@ -76,6 +94,17 @@ export class IntegrationsService {
    */
   async syncCatalog(tenantId = 'default'): Promise<CatalogSyncResponse> {
     const result = await this.meliSync.syncAllCatalog(tenantId);
+    return {
+      syncedProducts: result.syncedProducts,
+      totalVariants: result.totalVariants,
+    };
+  }
+
+  /**
+   * Dispara sincronização completa de catálogo com a Shopee.
+   */
+  async syncShopeeCatalog(tenantId = 'default'): Promise<CatalogSyncResponse> {
+    const result = await this.shopeeSync.syncAllCatalog(tenantId);
     return {
       syncedProducts: result.syncedProducts,
       totalVariants: result.totalVariants,
