@@ -13,6 +13,7 @@ import { StockService } from '../../catalog/stock.service';
 import { ERP_SERVICE, type ErpService } from '../../erp/erp-service';
 import { OrderStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AmazonSyncService } from '../amazon/amazon-sync.service';
 import { ShopeeWebhookDto } from '../dto/shopee-webhook.dto';
 import { MercadoLivreSyncService } from '../mercadolivre/mercadolivre-sync.service';
 import { ShopeeConnector } from './shopee-connector';
@@ -35,6 +36,7 @@ export class ShopeeWebhookService {
     private readonly connector: ShopeeConnector,
     private readonly stock: StockService,
     @Optional() private readonly meliSync?: MercadoLivreSyncService,
+    @Optional() private readonly amazonSync?: AmazonSyncService,
     @Optional()
     @Inject(ERP_SERVICE)
     private readonly erp?: ErpService,
@@ -284,13 +286,13 @@ export class ShopeeWebhookService {
       });
     });
 
-    // 6. Cascata de estoque em tempo real para o Mercado Livre (para sincronizar a venda que acabou de ocorrer na Shopee)
-    if (this.meliSync) {
-      for (const item of orderItemsToCreate) {
-        const updatedVariant = await this.prisma.productVariant.findUnique({
-          where: { id: item.variantId },
-        });
-        if (updatedVariant) {
+    // 6. Cascata de estoque em tempo real para os demais marketplaces (Mercado Livre e Amazon)
+    for (const item of orderItemsToCreate) {
+      const updatedVariant = await this.prisma.productVariant.findUnique({
+        where: { id: item.variantId },
+      });
+      if (updatedVariant) {
+        if (this.meliSync) {
           this.meliSync
             .syncVariantStock(
               item.variantId,
@@ -300,6 +302,20 @@ export class ShopeeWebhookService {
             .catch((syncErr: unknown) => {
               this.logger.warn(
                 `Erro ao propagar baixa de estoque Shopee para Mercado Livre: ${String(syncErr)}`,
+              );
+            });
+        }
+
+        if (this.amazonSync) {
+          this.amazonSync
+            .syncVariantStock(
+              item.variantId,
+              updatedVariant.stockQuantity,
+              tenantId,
+            )
+            .catch((syncErr: unknown) => {
+              this.logger.warn(
+                `Erro ao propagar baixa de estoque Shopee para Amazon: ${String(syncErr)}`,
               );
             });
         }

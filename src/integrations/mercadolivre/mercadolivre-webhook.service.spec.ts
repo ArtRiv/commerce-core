@@ -24,6 +24,9 @@ describe('MercadoLivreWebhookService', () => {
       },
       productVariant: {
         findFirst: jest.fn(),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'var-1', stockQuantity: 9 }),
       },
       $transaction: jest.fn((callback) => callback(mockPrisma)),
     };
@@ -65,6 +68,14 @@ describe('MercadoLivreWebhookService', () => {
       decrement: jest.fn().mockResolvedValue(true),
     };
 
+    const mockShopeeSync = {
+      syncVariantStock: jest.fn().mockResolvedValue(true),
+    };
+
+    const mockAmazonSync = {
+      syncVariantStock: jest.fn().mockResolvedValue(true),
+    };
+
     mockErp = {
       exportOrder: jest.fn().mockResolvedValue({ erpOrderId: 'bling-123' }),
     };
@@ -73,6 +84,8 @@ describe('MercadoLivreWebhookService', () => {
       mockPrisma,
       mockConnector,
       mockStock,
+      mockShopeeSync as any,
+      mockAmazonSync as any,
       mockErp,
     );
   });

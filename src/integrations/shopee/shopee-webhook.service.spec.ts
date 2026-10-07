@@ -84,6 +84,10 @@ describe('ShopeeWebhookService', () => {
       syncVariantStock: jest.fn().mockResolvedValue({ updatedMappings: 1 }),
     };
 
+    const mockAmazonSync = {
+      syncVariantStock: jest.fn().mockResolvedValue(true),
+    };
+
     mockErp = {
       exportOrder: jest
         .fn()
@@ -96,6 +100,7 @@ describe('ShopeeWebhookService', () => {
       mockConnector,
       mockStock,
       mockMeliSync,
+      mockAmazonSync as any,
       mockErp,
     );
   });

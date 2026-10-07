@@ -4611,6 +4611,236 @@
         ]
       }
     },
+    "/integrations/amazon/auth-url": {
+      "get": {
+        "operationId": "IntegrationsController_getAmazonAuthUrl",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUrlResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Gera URL de autorização Login with Amazon (LWA) para a Selling Partner API com state HMAC-SHA256.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/amazon/callback": {
+      "post": {
+        "operationId": "IntegrationsController_amazonCallback",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AmazonCallbackDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationItemResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Troca spapi_oauth_code por tokens LWA e ativa integração em tenant_integrations com criptografia AES-256-GCM.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/amazon/disconnect": {
+      "post": {
+        "operationId": "IntegrationsController_disconnectAmazon",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisconnectIntegrationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Desconecta e revoga credenciais da integração com a Amazon SP-API.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/amazon/sync": {
+      "post": {
+        "operationId": "IntegrationsController_syncAmazonCatalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSyncResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Dispara sincronização manual de catálogo e estoque para a Amazon SP-API via Listings Items API.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/amazon/notifications": {
+      "post": {
+        "operationId": "IntegrationsController_amazonNotifications",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AmazonNotificationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receptor público de notificações assíncronas de pedidos da Amazon (EventBridge / SQS / Notifications API).",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/reports/product-sales": {
       "get": {
         "description": "How much of each piece left, best-selling first.\n\nA sale is an order that is `PAID`, `SHIPPED` or `DELIVERED`, timed by **`paidAt`** — when the money arrived, not when the cart froze.\n\n`CREATED` does not count: the stock left the shelf but nothing was paid, and half of those orders never are. `CANCELLED` and `REFUNDED` do not count either, and both return their units to stock — so \"units sold\" and \"stock that left the shelf\" keep saying the same thing.\n\nThe window is `[from, to)` — start inclusive, end **exclusive**, so asking for two adjacent months never counts an order twice. Both are optional: omit `to` for now, omit `from` for 30 days before `to`.\n\nRows are grouped by **product id** and named from the live catalogue, so renaming a piece mid-period does not split it into two lines. Sizes are summed together: which size to restock is a different question, and this route does not answer it.\n\n`itemsRevenueCents` is the goods alone, at the price frozen on each order line. Freight is not attributable to a piece and lives on `GET /reports/revenue`.",
@@ -7420,6 +7650,75 @@
           "code",
           "timestamp",
           "data"
+        ]
+      },
+      "AmazonCallbackDto": {
+        "type": "object",
+        "properties": {
+          "spapi_oauth_code": {
+            "type": "string",
+            "description": "Código de autorização OAuth 2.0 retornado pela Amazon (spapi_oauth_code).",
+            "example": "ANzUvgZcKjV..."
+          },
+          "code": {
+            "type": "string",
+            "description": "Código de autorização (alias convencional code).",
+            "example": "ANzUvgZcKjV..."
+          },
+          "selling_partner_id": {
+            "type": "string",
+            "description": "Identificador do vendedor na Amazon (Selling Partner ID / Merchant ID).",
+            "example": "A21TJRUUN4KGV"
+          },
+          "state": {
+            "type": "string",
+            "description": "Parâmetro state assinado com HMAC-SHA256 para prevenção de CSRF.",
+            "example": "eyJ0ZW5hbnRJZCI6ImRlZmF1bHQiLCJub25jZSI6Ii...}"
+          }
+        },
+        "required": [
+          "selling_partner_id",
+          "state"
+        ]
+      },
+      "AmazonNotificationDto": {
+        "type": "object",
+        "properties": {
+          "NotificationType": {
+            "type": "string",
+            "description": "Tipo da notificação SP-API (ex: ORDER_CHANGE, MFN_ORDER_STATUS_CHANGE).",
+            "example": "ORDER_CHANGE"
+          },
+          "notificationType": {
+            "type": "string",
+            "description": "Tipo da notificação em camelCase / EventBridge detail-type.",
+            "example": "ORDER_CHANGE"
+          },
+          "detail-type": {
+            "type": "string",
+            "description": "Tipo de detalhe em eventos disparados via Amazon EventBridge.",
+            "example": "Amazon Selling Partner Notification"
+          },
+          "SellerId": {
+            "type": "string",
+            "description": "ID da conta ou seller de origem.",
+            "example": "A21TJRUUN4KGV"
+          },
+          "Payload": {
+            "type": "object",
+            "description": "Dados ou payload do evento da notificação (contém AmazonOrderId, status, etc.)."
+          },
+          "payload": {
+            "type": "object",
+            "description": "Payload em minúsculo / formato EventBridge detail."
+          },
+          "detail": {
+            "type": "object",
+            "description": "Detail em eventos nativos do Amazon EventBridge."
+          }
+        },
+        "required": [
+          "Payload"
         ]
       },
       "ProductSalesRowResponse": {

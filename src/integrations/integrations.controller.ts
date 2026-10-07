@@ -4,6 +4,8 @@ import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PERMISSIONS } from '../auth/authz/permissions';
 import { RequirePermissions } from '../auth/authz/require-permissions.decorator';
 import { Public } from '../auth/public.decorator';
+import { AmazonCallbackDto } from './dto/amazon-callback.dto';
+import { AmazonNotificationDto } from './dto/amazon-notification.dto';
 import { MercadoLivreCallbackDto } from './dto/mercadolivre-callback.dto';
 import { MercadoLivreWebhookDto } from './dto/mercadolivre-webhook.dto';
 import { ShopeeCallbackDto } from './dto/shopee-callback.dto';
@@ -203,6 +205,97 @@ export class IntegrationsController {
     const result =
       await this.integrationsService.shopeeWebhook.processPushNotification(
         dto,
+        'default',
+      );
+
+    return {
+      received: true,
+      action: result.action,
+    };
+  }
+
+  // --- AMAZON SP-API ---
+
+  @Get('amazon/auth-url')
+  @RequirePermissions(PERMISSIONS.INTEGRATIONS_MANAGE)
+  @ApiOperation({
+    summary:
+      'Gera URL de autorização Login with Amazon (LWA) para a Selling Partner API com state HMAC-SHA256.',
+  })
+  @ApiOkResponse({ type: AuthUrlResponse })
+  getAmazonAuthUrl(): AuthUrlResponse {
+    const url =
+      this.integrationsService.amazonAuth.getAuthorizationUrl('default');
+    return { url };
+  }
+
+  @Post('amazon/callback')
+  @RequirePermissions(PERMISSIONS.INTEGRATIONS_MANAGE)
+  @ApiOperation({
+    summary:
+      'Troca spapi_oauth_code por tokens LWA e ativa integração em tenant_integrations com criptografia AES-256-GCM.',
+  })
+  @ApiOkResponse({ type: IntegrationItemResponse })
+  async amazonCallback(
+    @Body() dto: AmazonCallbackDto,
+  ): Promise<IntegrationItemResponse> {
+    const code = dto.spapi_oauth_code ?? dto.code ?? '';
+    const result =
+      await this.integrationsService.amazonAuth.exchangeAuthorizationCode(
+        code,
+        dto.selling_partner_id,
+        dto.state,
+      );
+
+    return {
+      provider: 'AMAZON',
+      connected: true,
+      status: 'ACTIVE',
+      expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+      metadata: {
+        sellingPartnerId: result.sellingPartnerId,
+        marketplaceId: result.marketplaceId,
+        dppCompliant: true,
+      },
+    };
+  }
+
+  @Post('amazon/disconnect')
+  @RequirePermissions(PERMISSIONS.INTEGRATIONS_MANAGE)
+  @ApiOperation({
+    summary:
+      'Desconecta e revoga credenciais da integração com a Amazon SP-API.',
+  })
+  @ApiOkResponse({ type: DisconnectIntegrationResponse })
+  async disconnectAmazon(): Promise<DisconnectIntegrationResponse> {
+    return this.integrationsService.disconnect('AMAZON', 'default');
+  }
+
+  @Post('amazon/sync')
+  @RequirePermissions(PERMISSIONS.INTEGRATIONS_MANAGE)
+  @ApiOperation({
+    summary:
+      'Dispara sincronização manual de catálogo e estoque para a Amazon SP-API via Listings Items API.',
+  })
+  @ApiOkResponse({ type: CatalogSyncResponse })
+  async syncAmazonCatalog(): Promise<CatalogSyncResponse> {
+    return this.integrationsService.syncAmazonCatalog('default');
+  }
+
+  @Public()
+  @Post('amazon/notifications')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Receptor público de notificações assíncronas de pedidos da Amazon (EventBridge / SQS / Notifications API).',
+  })
+  @ApiOkResponse({ type: WebhookAckResponse })
+  async amazonNotifications(
+    @Body() dto: AmazonNotificationDto,
+  ): Promise<WebhookAckResponse> {
+    const result =
+      await this.integrationsService.amazonWebhook.processNotification(
+        dto as Record<string, unknown>,
         'default',
       );
 

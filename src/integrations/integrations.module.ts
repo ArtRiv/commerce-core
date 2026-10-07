@@ -2,6 +2,12 @@ import { Module } from '@nestjs/common';
 
 import { CatalogModule } from '../catalog/catalog.module';
 import { ErpModule } from '../erp/erp.module';
+import { AmazonAuthService } from './amazon/amazon-auth.service';
+import { AmazonCatalogMappingService } from './amazon/amazon-catalog-mapping.service';
+import { AmazonConnector } from './amazon/amazon-connector';
+import { AmazonDppService } from './amazon/amazon-dpp.service';
+import { AmazonSyncService } from './amazon/amazon-sync.service';
+import { AmazonWebhookService } from './amazon/amazon-webhook.service';
 import { EncryptionService } from './crypto/encryption.service';
 import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
@@ -29,6 +35,12 @@ import { ShopeeWebhookService } from './shopee/shopee-webhook.service';
     ShopeeConnector,
     ShopeeSyncService,
     ShopeeWebhookService,
+    AmazonAuthService,
+    AmazonCatalogMappingService,
+    AmazonConnector,
+    AmazonDppService,
+    AmazonSyncService,
+    AmazonWebhookService,
     IntegrationsService,
   ],
   exports: [
@@ -42,6 +54,12 @@ import { ShopeeWebhookService } from './shopee/shopee-webhook.service';
     ShopeeConnector,
     ShopeeSyncService,
     ShopeeWebhookService,
+    AmazonAuthService,
+    AmazonCatalogMappingService,
+    AmazonConnector,
+    AmazonDppService,
+    AmazonSyncService,
+    AmazonWebhookService,
     IntegrationsService,
   ],
 })

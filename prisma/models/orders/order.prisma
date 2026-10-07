@@ -130,11 +130,14 @@ model Order {
   /// Timestamp when the shipping label was purchased from the carrier.
   labelPurchasedAt DateTime? @map("label_purchased_at")
 
-  /// Origem do canal de venda: STOREFRONT (padrão) ou marketplace integrado (MERCADO_LIVRE).
+  /// Origem do canal de venda: STOREFRONT (padrão) ou marketplace integrado (MERCADO_LIVRE, SHOPEE, AMAZON).
   originChannel String @default("STOREFRONT") @map("origin_channel")
 
-  /// Identificador do pedido no marketplace de origem (ex: ID da venda no Mercado Livre).
+  /// Identificador do pedido no marketplace de origem (ex: ID da venda no Mercado Livre, Shopee ou Amazon).
   externalOrderId String? @map("external_order_id")
+
+  /// Dados de identificação pessoal (PII) do comprador (Amazon SP-API DPP) cifrados com AES-256-GCM em repouso.
+  encryptedBuyerPii String? @map("encrypted_buyer_pii")
 
   paidAt      DateTime? @map("paid_at")
   shippedAt   DateTime? @map("shipped_at")

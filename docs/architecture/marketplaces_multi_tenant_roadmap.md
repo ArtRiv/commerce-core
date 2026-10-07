@@ -27,9 +27,9 @@ A ruptura de estoque (*stockout*) decorrente da falta de sincronização em temp
 |---|---|---|---|---|---|---|
 | **Melhor Envio** | Logística e Cotação Dinâmica | OAuth 2.0 (Authorization Code) | 30 dias (Refresh Token) | Webhooks de rastreamento | Baixa | **Concluído (Sessão 8)** |
 | **Bling API v3** | ERP e Emissão Fiscal NF-e | OAuth 2.0 PKCE / API Key | 6 a 24h (Refresh Token 30d) | Webhooks com concorrência | Média | **Concluído (Sessão 8)** |
-| **Mercado Livre** | Marketplace / Anúncios | OAuth 2.0 (Authorization Code) | 6 horas (Refresh rotativo de uso único) | Webhooks orientados a tópicos (`orders`, `items`) | Média | **Planejado (Sessão 10)** |
-| **Shopee** | Marketplace / Anúncios | Assinatura HMAC-SHA256 e Shop Auth | 4 horas (Refresh Token 30d) | Push Mechanism | Alta (cadastro formal de ISV, empresa de software) | **Planejado (Sessão 11)** |
-| **Amazon SP-API** | Marketplace / Anúncios | Login with Amazon (LWA) + AWS IAM | 1 hora (Client Secret rotativo 180d) | Mensageria assíncrona (AWS SQS / EventBridge) | Crítica (auditoria estrita de DPP e criptografia PII) | **Planejado (Sessão 12)** |
+| **Mercado Livre** | Marketplace / Anúncios | OAuth 2.0 (Authorization Code) | 6 horas (Refresh rotativo de uso único) | Webhooks orientados a tópicos (`orders`, `items`) | Média | **Concluído (Sessão 10)** |
+| **Shopee** | Marketplace / Anúncios | Assinatura HMAC-SHA256 e Shop Auth | 4 horas (Refresh Token 30d) | Push Mechanism | Alta (cadastro formal de ISV, empresa de software) | **Concluído (Sessão 11)** |
+| **Amazon SP-API** | Marketplace / Anúncios | Login with Amazon (LWA) + AWS IAM | 1 hora (Client Secret rotativo 180d) | Mensageria assíncrona (AWS SQS / EventBridge / Webhook) | Crítica (auditoria estrita de DPP e criptografia PII) | **Concluído (Sessão 12)** |
 
 ---
 
@@ -102,17 +102,17 @@ Para evitar vendas duplicadas (*overselling*) de itens com estoque baixo quando 
 
 ---
 
-### Sessão 10 — Hub Multi-Tenant de Credenciais & Integração Mercado Livre
-- [ ] **Modelo de Credenciais Multi-Tenant:**
+### Sessão 10 — Hub Multi-Tenant de Credenciais & Integração Mercado Livre — [CONCLUÍDA]
+- [x] **Modelo de Credenciais Multi-Tenant:**
   - Tabela `tenant_integrations` (tenantId, provider, credentialsEncrypted, status, expiresAt).
   - Serviço de criptografia com chave mestre em ambiente (`APP_ENCRYPTION_KEY`).
   - Fluxo de autorização OAuth 2.0 com validação de `state` assinado e CSRF protection.
-- [ ] **Integração Mercado Livre:**
+- [x] **Integração Mercado Livre:**
   - Renovação segura de tokens com lock distribuído para refresh token rotativo.
   - Sincronização de catálogo: publicação e atualização de anúncios (título, preço, fotos, atributos e variantes).
   - Sincronização de estoque: atualização atômica de saldo no Mercado Livre em cada venda local.
   - Webhook Receiver: processamento de notificações de pedidos (`orders_v2`) importando vendas externas para a tabela `orders` local.
-- [ ] **Interface no Admin:**
+- [x] **Interface no Admin:**
   - Tela de Conexões/Integrações (`/admin/integracoes`) permitindo conectar a conta do Mercado Livre em 1-clique.
 
 ---
@@ -131,12 +131,25 @@ Para evitar vendas duplicadas (*overselling*) de itens com estoque baixo quando 
 
 ---
 
-### Sessão 12 — Integração Amazon Selling Partner API (SP-API)
-- [ ] **Infraestrutura de Autenticação LWA & AWS IAM:**
-  - Login with Amazon (LWA) credentials combinadas com perfis de IAM (STS assume-role e assinatura AWS SigV4).
-- [ ] **Conformidade com Data Protection Policy (DPP):**
-  - Rotação forçada de credenciais a cada 180 dias.
-  - Encriptação de dados de identificação pessoal (PII) do comprador em repouso e em trânsito.
-- [ ] **Mensageria Assíncrona & Feed API:**
-  - Ingestão de pedidos via AWS SQS / EventBridge.
-  - Envio de feeds em lote para produtos e preços via Feeds API v2021-06-30.
+### Sessão 12 — Integração Amazon Selling Partner API (SP-API) — [CONCLUÍDA]
+- [x] **Infraestrutura de Autenticação LWA & AWS IAM:**
+  - Login with Amazon (LWA) OAuth 2.0 com state criptografado via HMAC-SHA256.
+  - Integração com credenciais AWS IAM e assinatura AWS Signature Version 4 (SigV4) para endpoints REST da SP-API (`execute-api`).
+  - Persistência segura em `tenant_integrations` com criptografia simétrica AES-256-GCM.
+- [x] **Conformidade com Data Protection Policy (DPP):**
+  - Rotação forçada de credenciais com monitoramento e relatório de conformidade a cada 180 dias.
+  - Encriptação de dados de identificação pessoal (PII) do comprador em repouso (AES-256-GCM) no campo `encryptedBuyerPii` do modelo `Order`.
+  - Rotina de anonimização e higienização de PII após 30 dias da conclusão do pedido (`anonymizeOrderPii`).
+- [x] **Conector SP-API & Controle de Concorrência:**
+  - Renovação atômica do LWA access token (1h) sob row lock no PostgreSQL via `SELECT ... FOR UPDATE` em transação Prisma.
+  - Despacho assinado SigV4 para Orders API v0, Listings Items API v2021-08-01 e Feeds API v2021-06-30.
+- [x] **Mapeamento de Catálogo & Sincronização de Inventário:**
+  - Mapeamento dinâmico de categorias de moda/vestuário para Product Types (`SHIRT`, `SWEATSHIRT`, `PANTS`, `HAT`, `CLOTHING`) com JSON Patches para Listings Items API.
+  - Sincronização atômica de estoque em tempo real integrada ao checkout local (`OrdersService.checkout`) e sincronização em lote de catálogo.
+- [x] **Mensageria Assíncrona & Webhook Receiver:**
+  - Ingestão de notificações de pedidos via Amazon EventBridge / SQS / Notifications API com canal `originChannel: "AMAZON"`.
+  - Baixa atômica de estoque, propagação multicanal para Mercado Livre e Shopee e exportação automática para o Bling ERP.
+- [x] **Painel Administrativo (`/admin/integracoes`):**
+  - Card interativo da Amazon SP-API com conexão em 1-clique via LWA, exibição de Selling Partner ID, Marketplace Brasil (`A2Q3Y263D00KWC`), status de conformidade DPP e sincronização manual.
+- [x] **100% de Qualidade & Testes:**
+  - 795 testes unitários Jest no backend (62 suítes, 100% aprovados), 65 testes Vitest no frontend (11 suítes, 100% aprovados), 7/7 testes E2E Playwright reais (100% aprovados) e builds de produção bem-sucedidos em ambos os repositórios.

@@ -53,6 +53,9 @@ describe('IntegrationsController', () => {
       syncShopeeCatalog: jest
         .fn()
         .mockResolvedValue({ syncedProducts: 3, totalVariants: 7 }),
+      syncAmazonCatalog: jest
+        .fn()
+        .mockResolvedValue({ syncedProducts: 4, totalVariants: 9 }),
       meliWebhook: {
         processNotification: jest.fn().mockResolvedValue({
           processed: true,
@@ -62,6 +65,24 @@ describe('IntegrationsController', () => {
       shopeeWebhook: {
         verifyPushSignature: jest.fn().mockReturnValue(true),
         processPushNotification: jest.fn().mockResolvedValue({
+          processed: true,
+          action: 'order_imported_successfully',
+        }),
+      },
+      amazonAuth: {
+        getAuthorizationUrl: jest
+          .fn()
+          .mockReturnValue(
+            'https://sellercentral.amazon.com.br/apps/authorize/consent?application_id=123',
+          ),
+        exchangeAuthorizationCode: jest.fn().mockResolvedValue({
+          tenantId: 'default',
+          sellingPartnerId: 'A21TJRUUN4KGV',
+          marketplaceId: 'A2Q3Y263D00KWC',
+        }),
+      },
+      amazonWebhook: {
+        processNotification: jest.fn().mockResolvedValue({
           processed: true,
           action: 'order_imported_successfully',
         }),
@@ -162,6 +183,57 @@ describe('IntegrationsController', () => {
     expect(res.action).toBe('order_imported_successfully');
     expect(
       mockIntegrationsService.shopeeWebhook.verifyPushSignature,
+    ).toHaveBeenCalled();
+  });
+
+  it('retorna URL de autorização da Amazon LWA', () => {
+    const res = controller.getAmazonAuthUrl();
+    expect(res.url).toContain('https://sellercentral.amazon.com.br');
+  });
+
+  it('processa callback de autorização da Amazon LWA', async () => {
+    const res = await controller.amazonCallback({
+      spapi_oauth_code: 'spapi-code-123',
+      selling_partner_id: 'A21TJRUUN4KGV',
+      state: 'state-abc',
+    });
+    expect(res.provider).toBe('AMAZON');
+    expect(res.connected).toBe(true);
+    expect(res.metadata).toEqual({
+      sellingPartnerId: 'A21TJRUUN4KGV',
+      marketplaceId: 'A2Q3Y263D00KWC',
+      dppCompliant: true,
+    });
+  });
+
+  it('desconecta integração com a Amazon SP-API', async () => {
+    const res = await controller.disconnectAmazon();
+    expect(res.disconnected).toBe(true);
+    expect(mockIntegrationsService.disconnect).toHaveBeenCalledWith(
+      'AMAZON',
+      'default',
+    );
+  });
+
+  it('dispara sincronização de catálogo com a Amazon SP-API', async () => {
+    const res = await controller.syncAmazonCatalog();
+    expect(res.syncedProducts).toBe(4);
+    expect(res.totalVariants).toBe(9);
+  });
+
+  it('recebe notificação assíncrona da Amazon SP-API', async () => {
+    const res = await controller.amazonNotifications({
+      NotificationType: 'ORDER_CHANGE',
+      Payload: {
+        OrderChangeNotification: {
+          AmazonOrderId: '701-1234567-1234567',
+        },
+      },
+    });
+    expect(res.received).toBe(true);
+    expect(res.action).toBe('order_imported_successfully');
+    expect(
+      mockIntegrationsService.amazonWebhook.processNotification,
     ).toHaveBeenCalled();
   });
 });
