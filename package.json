@@ -32,7 +32,8 @@
     "e2e:setup": "tsx prisma/e2e-schema.ts",
     "test:load": "k6 run load-tests/concurrent-buyers.js",
     "test:load:rate-limit": "k6 run load-tests/rate-limiting.js",
-    "admin:create": "tsx scripts/create-admin.ts"
+    "admin:create": "tsx scripts/create-admin.ts",
+    "db:deploy": "node scripts/deploy-migrations.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
