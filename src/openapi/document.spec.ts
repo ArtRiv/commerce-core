@@ -70,8 +70,12 @@ const CONTROLLERS = [
  * 70 since marketplace integrations (Shopee): GET /integrations/shopee/auth-url,
  * POST /integrations/shopee/callback, POST /integrations/shopee/disconnect,
  * POST /integrations/shopee/sync, POST /integrations/shopee/webhook.
+ *
+ * 75 since marketplace integrations (Amazon SP-API): GET /integrations/amazon/auth-url,
+ * POST /integrations/amazon/callback, POST /integrations/amazon/disconnect,
+ * POST /integrations/amazon/sync, POST /integrations/amazon/notifications.
  */
-const EXPECTED_ROUTE_COUNT = 70;
+const EXPECTED_ROUTE_COUNT = 75;
 
 const HTTP_METHOD = new Map<RequestMethod, string>([
   [RequestMethod.GET, 'get'],
