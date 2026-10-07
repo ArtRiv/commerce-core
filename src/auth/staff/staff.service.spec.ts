@@ -51,6 +51,8 @@ function roleRow(name: string, keys: string[]) {
 function caller(id = 'caller-1'): AuthenticatedUser {
   return {
     id,
+    email: 'caller@example.com',
+    name: 'Caller',
     role: 'admin',
     permissions: resolveEffectivePermissions([PERMISSIONS.STAFF_MANAGE]),
   };

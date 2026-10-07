@@ -35,10 +35,10 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { CreateVariantDto } from './dto/create-variant.dto';
 import { ListProductsQueryDto } from './dto/list-products-query.dto';
 import { RemoveVariantQueryDto } from './dto/remove-variant-query.dto';
-import { RenameVariantDto } from './dto/rename-variant.dto';
 import { ReorderVariantsDto } from './dto/reorder-variants.dto';
 import { SetStockDto } from './dto/set-stock.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { UpdateVariantDto } from './dto/update-variant.dto';
 import { ProductsService } from './products.service';
 import {
   PaginatedProductsResponse,
@@ -180,12 +180,48 @@ export class ProductsController {
     return this.products.reorderVariants(id, dto.variantIds);
   }
 
+  @RequirePermissions(PERMISSIONS.PRODUCTS_DELETE)
+  @Patch(':id/variants/:variantId/archive')
+  @ApiOperation({
+    summary: 'Archive a size',
+    description:
+      'Archives a variant, removing it from storefront sales while keeping its row and order item references intact.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'variantId', format: 'uuid' })
+  @ApiOkResponse({ type: ProductResponse })
+  @ApiConflict('A product must keep at least one active variant.')
+  @ApiNotFound('No such product, or that variant does not belong to it.')
+  archiveVariant(
+    @Param('id') id: string,
+    @Param('variantId') variantId: string,
+  ) {
+    return this.products.archiveVariant(id, variantId);
+  }
+
+  @RequirePermissions(PERMISSIONS.PRODUCTS_UPDATE)
+  @Patch(':id/variants/:variantId/unarchive')
+  @ApiOperation({
+    summary: 'Unarchive a size',
+    description: 'Reactivates an archived variant.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({ name: 'variantId', format: 'uuid' })
+  @ApiOkResponse({ type: ProductResponse })
+  @ApiNotFound('No such product, or that variant does not belong to it.')
+  unarchiveVariant(
+    @Param('id') id: string,
+    @Param('variantId') variantId: string,
+  ) {
+    return this.products.unarchiveVariant(id, variantId);
+  }
+
   @RequirePermissions(PERMISSIONS.PRODUCTS_UPDATE)
   @Patch(':id/variants/:variantId')
   @ApiOperation({
-    summary: 'Rename a size',
+    summary: 'Update or rename a size',
     description:
-      '**Placed orders are untouched.** `OrderItem.variantLabel` is a snapshot taken at purchase, so renaming a size cannot rewrite what somebody bought — which is exactly why this operation is safe and why the snapshot exists.\n\nCarts are the deliberate opposite: they hold no snapshot, so a cart line immediately shows the new label. That is the current truth a cart promises.\n\nRenaming a size to the label it already has does nothing and answers 200.',
+      'Updates a variant label or physical dimensions.\n\n**Placed orders are untouched.** `OrderItem.variantLabel` is a snapshot taken at purchase, so renaming a size cannot rewrite what somebody bought.\n\nCarts are the deliberate opposite: they hold no snapshot, so a cart line immediately shows the new label.',
   })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiParam({ name: 'variantId', format: 'uuid' })
@@ -193,12 +229,12 @@ export class ProductsController {
   @ApiBadRequest('`label` is empty or longer than 20 characters.')
   @ApiConflict('Another size of this product already has that label.')
   @ApiNotFound('No such product, or that variant does not belong to it.')
-  renameVariant(
+  updateVariant(
     @Param('id') id: string,
     @Param('variantId') variantId: string,
-    @Body() dto: RenameVariantDto,
+    @Body() dto: UpdateVariantDto,
   ) {
-    return this.products.renameVariant(id, variantId, dto.label);
+    return this.products.updateVariant(id, variantId, dto);
   }
 
   /**

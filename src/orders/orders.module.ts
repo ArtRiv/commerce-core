@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 
 import { CatalogModule } from '../catalog/catalog.module';
+import { ErpModule } from '../erp/erp.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 import { MailModule } from '../mail/mail.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { ShippingModule } from '../shipping/shipping.module';
@@ -35,7 +37,14 @@ import { ShippingQuoteService } from './shipping-quote.service';
  * /shipping/quote: pricing freight means reading a cart, and a cart is ours.
  */
 @Module({
-  imports: [CatalogModule, PaymentsModule, ShippingModule, MailModule],
+  imports: [
+    CatalogModule,
+    ErpModule,
+    PaymentsModule,
+    ShippingModule,
+    MailModule,
+    IntegrationsModule,
+  ],
   controllers: [
     CartController,
     OrdersController,

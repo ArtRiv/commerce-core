@@ -16,6 +16,16 @@ export interface CreateVariantInput {
   position?: number;
   /** Absent = 0: a size that exists but has none left is a real state. */
   stockQuantity?: number;
+  heightCm?: number | null;
+  widthCm?: number | null;
+  lengthCm?: number | null;
+}
+
+export interface UpdateVariantInput {
+  label?: string;
+  heightCm?: number | null;
+  widthCm?: number | null;
+  lengthCm?: number | null;
 }
 
 export interface CreateProductInput {
@@ -168,7 +178,16 @@ const PRODUCT_INCLUDE = {
     select: { category: { select: { id: true, name: true, slug: true } } },
   },
   variants: {
-    select: { id: true, label: true, position: true, stockQuantity: true },
+    select: {
+      id: true,
+      label: true,
+      position: true,
+      stockQuantity: true,
+      heightCm: true,
+      widthCm: true,
+      lengthCm: true,
+      isArchived: true,
+    },
     orderBy: VARIANT_ORDER,
   },
 } as const;
@@ -181,6 +200,10 @@ export interface WithCategoryRows {
     label: string;
     position: number;
     stockQuantity: number;
+    heightCm: number | null;
+    widthCm: number | null;
+    lengthCm: number | null;
+    isArchived: boolean;
   }[];
 }
 
@@ -196,10 +219,9 @@ function toProductView<T extends WithCategoryRows>(row: T) {
   return {
     ...row,
     categories: row.categories.map((link) => link.category),
-    stockQuantity: row.variants.reduce(
-      (total, variant) => total + variant.stockQuantity,
-      0,
-    ),
+    stockQuantity: row.variants
+      .filter((variant) => !variant.isArchived)
+      .reduce((total, variant) => total + variant.stockQuantity, 0),
   };
 }
 
@@ -278,6 +300,9 @@ export class ProductsService {
         // thing this column exists to prevent.
         position: input.position ?? this.nextPosition(product.variants),
         stockQuantity: input.stockQuantity ?? 0,
+        heightCm: input.heightCm ?? null,
+        widthCm: input.widthCm ?? null,
+        lengthCm: input.lengthCm ?? null,
       },
     });
 
@@ -336,6 +361,96 @@ export class ProductsService {
       }
       throw error;
     }
+
+    return this.findById(productId);
+  }
+
+  async updateVariant(
+    productId: string,
+    variantId: string,
+    input: UpdateVariantInput,
+  ) {
+    const variant = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, productId },
+      select: { id: true, label: true },
+    });
+
+    if (!variant) {
+      throw new NotFoundException('Product variant not found');
+    }
+
+    const data: {
+      label?: string;
+      heightCm?: number | null;
+      widthCm?: number | null;
+      lengthCm?: number | null;
+    } = {};
+
+    if (input.label && input.label !== variant.label) {
+      const taken = await this.prisma.productVariant.findFirst({
+        where: { productId, label: input.label },
+        select: { id: true },
+      });
+
+      if (taken) {
+        throw new ConflictException(
+          `This product already has a "${input.label}" variant`,
+        );
+      }
+      data.label = input.label;
+    }
+
+    if (input.heightCm !== undefined) data.heightCm = input.heightCm;
+    if (input.widthCm !== undefined) data.widthCm = input.widthCm;
+    if (input.lengthCm !== undefined) data.lengthCm = input.lengthCm;
+
+    if (Object.keys(data).length > 0) {
+      try {
+        await this.prisma.productVariant.update({
+          where: { id: variantId },
+          data,
+        });
+      } catch (error) {
+        if (hasPrismaCode(error, UNIQUE_VIOLATION)) {
+          throw new ConflictException(
+            `This product already has a "${input.label}" variant`,
+          );
+        }
+        throw error;
+      }
+    }
+
+    return this.findById(productId);
+  }
+
+  async archiveVariant(productId: string, variantId: string) {
+    await this.assertVariantBelongsTo(productId, variantId);
+
+    const activeCount = await this.prisma.productVariant.count({
+      where: { productId, isArchived: false },
+    });
+
+    if (activeCount <= 1) {
+      throw new ConflictException(
+        'A product must keep at least one active variant',
+      );
+    }
+
+    await this.prisma.productVariant.update({
+      where: { id: variantId },
+      data: { isArchived: true },
+    });
+
+    return this.findById(productId);
+  }
+
+  async unarchiveVariant(productId: string, variantId: string) {
+    await this.assertVariantBelongsTo(productId, variantId);
+
+    await this.prisma.productVariant.update({
+      where: { id: variantId },
+      data: { isArchived: false },
+    });
 
     return this.findById(productId);
   }
@@ -563,6 +678,10 @@ export class ProductsService {
         label: true,
         position: true,
         stockQuantity: true,
+        heightCm: true,
+        widthCm: true,
+        lengthCm: true,
+        isArchived: true,
         product: {
           select: {
             id: true,
@@ -791,6 +910,9 @@ export class ProductsService {
       label: variant.label,
       position: variant.position ?? index,
       stockQuantity: variant.stockQuantity ?? 0,
+      heightCm: variant.heightCm ?? null,
+      widthCm: variant.widthCm ?? null,
+      lengthCm: variant.lengthCm ?? null,
     }));
   }
 

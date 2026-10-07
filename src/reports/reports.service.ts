@@ -64,6 +64,13 @@ export interface RevenueBucket {
   orderCount: number;
 }
 
+export interface RevenueTotals {
+  revenueCents: number;
+  itemsSubtotalCents: number;
+  shippingCents: number;
+  orderCount: number;
+}
+
 export interface UnsoldProductRow {
   productId: string;
   name: string;
@@ -228,12 +235,28 @@ export class ReportsService {
       orderCount: toCount(row.orderCount),
     }));
 
+    const totals: RevenueTotals = buckets.reduce(
+      (acc, b) => ({
+        revenueCents: acc.revenueCents + b.revenueCents,
+        itemsSubtotalCents: acc.itemsSubtotalCents + b.itemsSubtotalCents,
+        shippingCents: acc.shippingCents + b.shippingCents,
+        orderCount: acc.orderCount + b.orderCount,
+      }),
+      {
+        revenueCents: 0,
+        itemsSubtotalCents: 0,
+        shippingCents: 0,
+        orderCount: 0,
+      },
+    );
+
     return {
       from: window.from,
       to: window.to,
       granularity,
       timeZone: zone,
       buckets,
+      totals,
     };
   }
 

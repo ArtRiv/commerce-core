@@ -45,6 +45,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       where: { id: payload.sub },
       select: {
         id: true,
+        email: true,
+        name: true,
         role: {
           select: {
             name: true,
@@ -67,6 +69,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       user.permissionsGrantedToUser.map((up) => up.permission.key),
     );
 
-    return { id: user.id, role: user.role.name, permissions };
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role.name,
+      permissions,
+    };
   }
 }

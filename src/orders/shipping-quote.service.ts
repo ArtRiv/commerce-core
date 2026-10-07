@@ -22,6 +22,9 @@ export interface QuotableItem {
   unitPriceCents: number;
   /** Null for a product nobody has weighed; the configured default fills in. */
   weightGrams: number | null;
+  heightCm?: number | null;
+  widthCm?: number | null;
+  lengthCm?: number | null;
 }
 
 /**
@@ -92,6 +95,9 @@ export class ShippingQuoteService {
         quantity: item.quantity,
         unitPriceCents: item.product.priceCents,
         weightGrams: item.product.weightGrams,
+        heightCm: item.variant.heightCm,
+        widthCm: item.variant.widthCm,
+        lengthCm: item.variant.lengthCm,
       })),
     );
 
@@ -133,6 +139,9 @@ export class ShippingQuoteService {
           quantity: item.quantity,
           unitPriceCents: item.unitPriceCents,
           weightGrams: item.weightGrams ?? this.defaultWeightGrams,
+          heightCm: item.heightCm ?? null,
+          widthCm: item.widthCm ?? null,
+          lengthCm: item.lengthCm ?? null,
         })),
       });
     } catch (error: unknown) {

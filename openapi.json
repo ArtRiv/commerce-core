@@ -537,6 +537,44 @@
         ]
       }
     },
+    "/auth/me": {
+      "get": {
+        "description": "Returns the authenticated caller’s profile, role, and resolved permissions.",
+        "operationId": "AuthController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token is missing, expired, or invalid.\n\nNo bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get current user profile",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/staff": {
       "get": {
         "description": "Everyone with a non-default role, plus anyone holding a per-user grant — the second half matters because a `customer` who was granted a permission is staff by capability whatever their role says.\n\nPlain shoppers are **not** listed. That is not an oversight: a customer directory is personal data and a different surface, reserved behind `customers.read`.\n\nWhich leaves one problem this route has to solve: whoever is about to be promoted is not staff yet. Pass `email` with an exact address to find any account, staff or not — knowing the address is the credential of that use case, and equality matching enumerates nothing. An address with no account is an empty page, not a 404.\n\nEach row separates what the **role** gives from what was **granted** to the person, and reports the union as `effectivePermissions` — which is exactly what the guard will see.",
@@ -859,7 +897,9 @@
                 "coupons.update",
                 "coupons.delete",
                 "reports.read",
-                "staff.manage"
+                "staff.manage",
+                "integrations.read",
+                "integrations.manage"
               ],
               "type": "string"
             }
@@ -1390,10 +1430,174 @@
         ]
       }
     },
+    "/products/{id}/variants/{variantId}/archive": {
+      "patch": {
+        "description": "Archives a variant, removing it from storefront sales while keeping its row and order item references intact.",
+        "operationId": "ProductsController_archiveVariant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "variantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `products.delete` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product, or that variant does not belong to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A product must keep at least one active variant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Archive a size",
+        "tags": [
+          "products"
+        ]
+      }
+    },
+    "/products/{id}/variants/{variantId}/unarchive": {
+      "patch": {
+        "description": "Reactivates an archived variant.",
+        "operationId": "ProductsController_unarchiveVariant",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "variantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `products.update` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product, or that variant does not belong to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unarchive a size",
+        "tags": [
+          "products"
+        ]
+      }
+    },
     "/products/{id}/variants/{variantId}": {
       "patch": {
-        "description": "**Placed orders are untouched.** `OrderItem.variantLabel` is a snapshot taken at purchase, so renaming a size cannot rewrite what somebody bought — which is exactly why this operation is safe and why the snapshot exists.\n\nCarts are the deliberate opposite: they hold no snapshot, so a cart line immediately shows the new label. That is the current truth a cart promises.\n\nRenaming a size to the label it already has does nothing and answers 200.",
-        "operationId": "ProductsController_renameVariant",
+        "description": "Updates a variant label or physical dimensions.\n\n**Placed orders are untouched.** `OrderItem.variantLabel` is a snapshot taken at purchase, so renaming a size cannot rewrite what somebody bought.\n\nCarts are the deliberate opposite: they hold no snapshot, so a cart line immediately shows the new label.",
+        "operationId": "ProductsController_updateVariant",
         "parameters": [
           {
             "name": "id",
@@ -1419,7 +1623,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RenameVariantDto"
+                "$ref": "#/components/schemas/UpdateVariantDto"
               }
             }
           }
@@ -1491,7 +1695,7 @@
             "bearer": []
           }
         ],
-        "summary": "Rename a size",
+        "summary": "Update or rename a size",
         "tags": [
           "products"
         ]
@@ -2577,6 +2781,15 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Search by order UUID prefix, customer name, or customer email.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3215,16 +3428,185 @@
         ]
       }
     },
+    "/orders/{id}/shipping-quotes": {
+      "get": {
+        "description": "Calculates real-time carrier shipping rates for an order based on its destination CEP and item weights/dimensions.",
+        "operationId": "OrdersController_quoteShipping",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShippingOptionResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `orders.read` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Quote available shipping rates for an existing order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
+    "/orders/{id}/label": {
+      "post": {
+        "description": "Purchases a carrier shipping label via Melhor Envio, automatically stamps the tracking code and label download URL, and transitions the order to SHIPPED.",
+        "operationId": "OrdersController_purchaseLabel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurchaseLabelDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid service code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `orders.update_status` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is not PAID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Purchase a shipping label for a paid order",
+        "tags": [
+          "orders"
+        ]
+      }
+    },
     "/payments/webhook": {
       "post": {
-        "description": "Called by the payment provider, never by application code. **Do not generate a client for this route** — it exists to be configured as a webhook destination in the provider dashboard.\n\n**There is no request schema, and none is invented here.** The body is the provider's own event envelope, read as raw bytes and never parsed by this API before its signature is checked. It is not part of this API's contract: the provider changes it when it likes, and the only part that matters here — the signature — travels in a header. The global validation pipe never sees this body either, because no DTO describes it.\n\nAuthentication is the `stripe-signature` header, an HMAC over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.\n\nA 200 means \"recorded, stop redelivering\", replays included: a redelivered event is acknowledged with `duplicate: true` rather than applied twice. Any non-2xx asks the provider to try again, which is this module's entire retry mechanism — the 503 below is deliberate for exactly that reason.",
+        "description": "Called by the payment provider, never by application code. **Do not generate a client for this route** — it exists to be configured as a webhook destination in the provider dashboard.\n\n**There is no request schema, and none is invented here.** The body is the provider's own event envelope, read as raw bytes and never parsed by this API before its signature is checked. It is not part of this API's contract: the provider changes it when it likes, and the only part that matters here — the signature — travels in a header. The global validation pipe never sees this body either, because no DTO describes it.\n\nAuthentication is the gateway-specific signature header, an HMAC (or token comparison) over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.\n\nA 200 means \"recorded, stop redelivering\", replays included: a redelivered event is acknowledged with `duplicate: true` rather than applied twice. Any non-2xx asks the provider to try again, which is this module's entire retry mechanism — the 503 below is deliberate for exactly that reason.",
         "operationId": "PaymentWebhookController_handle",
         "parameters": [
           {
             "name": "stripe-signature",
             "in": "header",
-            "description": "HMAC over the raw request body. Verifying it is the authentication of this route.",
-            "required": true,
+            "description": "Present on Stripe events. The hybrid router dispatches by whichever signature header is present.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3292,9 +3674,328 @@
             }
           }
         },
-        "summary": "Receive a payment provider event",
+        "summary": "Receive a payment provider event (generic)",
         "tags": [
           "payments"
+        ]
+      }
+    },
+    "/payments/webhook/asaas": {
+      "post": {
+        "description": "Called by the payment provider, never by application code. **Do not generate a client for this route** — it exists to be configured as a webhook destination in the provider dashboard.\n\n**There is no request schema, and none is invented here.** The body is the provider's own event envelope, read as raw bytes and never parsed by this API before its signature is checked. It is not part of this API's contract: the provider changes it when it likes, and the only part that matters here — the signature — travels in a header. The global validation pipe never sees this body either, because no DTO describes it.\n\nAuthentication is the gateway-specific signature header, an HMAC (or token comparison) over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.\n\nA 200 means \"recorded, stop redelivering\", replays included: a redelivered event is acknowledged with `duplicate: true` rather than applied twice. Any non-2xx asks the provider to try again, which is this module's entire retry mechanism — the 503 below is deliberate for exactly that reason.",
+        "operationId": "PaymentWebhookController_handleAsaas",
+        "parameters": [
+          {
+            "name": "asaas-access-token",
+            "in": "header",
+            "description": "The Asaas webhook token. Must equal ASAAS_WEBHOOK_SECRET for the event to be accepted.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Asaas raw event payload.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body missing or asaas-access-token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 300 requests per minute.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Refused so Asaas redelivers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receive an Asaas payment event",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/payments/webhook/mercadopago": {
+      "post": {
+        "description": "Called by the payment provider, never by application code. **Do not generate a client for this route** — it exists to be configured as a webhook destination in the provider dashboard.\n\n**There is no request schema, and none is invented here.** The body is the provider's own event envelope, read as raw bytes and never parsed by this API before its signature is checked. It is not part of this API's contract: the provider changes it when it likes, and the only part that matters here — the signature — travels in a header. The global validation pipe never sees this body either, because no DTO describes it.\n\nAuthentication is the gateway-specific signature header, an HMAC (or token comparison) over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.\n\nA 200 means \"recorded, stop redelivering\", replays included: a redelivered event is acknowledged with `duplicate: true` rather than applied twice. Any non-2xx asks the provider to try again, which is this module's entire retry mechanism — the 503 below is deliberate for exactly that reason.",
+        "operationId": "PaymentWebhookController_handleMercadoPago",
+        "parameters": [
+          {
+            "name": "x-signature",
+            "in": "header",
+            "description": "Mercado Pago HMAC signature header (ts=<timestamp>,v1=<hmac>).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Mercado Pago raw event payload.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body missing or x-signature is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 300 requests per minute.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Refused so Mercado Pago redelivers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receive a Mercado Pago payment event",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/payments/webhook/stripe": {
+      "post": {
+        "description": "Called by the payment provider, never by application code. **Do not generate a client for this route** — it exists to be configured as a webhook destination in the provider dashboard.\n\n**There is no request schema, and none is invented here.** The body is the provider's own event envelope, read as raw bytes and never parsed by this API before its signature is checked. It is not part of this API's contract: the provider changes it when it likes, and the only part that matters here — the signature — travels in a header. The global validation pipe never sees this body either, because no DTO describes it.\n\nAuthentication is the gateway-specific signature header, an HMAC (or token comparison) over exactly the bytes that were sent. That signature is the only thing standing between this route and anyone on the internet declaring an order paid, which is why the raw bytes are preserved instead of re-serialised from parsed JSON — re-serialising changes key order and spacing, and would invalidate every signature.\n\nA 200 means \"recorded, stop redelivering\", replays included: a redelivered event is acknowledged with `duplicate: true` rather than applied twice. Any non-2xx asks the provider to try again, which is this module's entire retry mechanism — the 503 below is deliberate for exactly that reason.",
+        "operationId": "PaymentWebhookController_handleStripe",
+        "parameters": [
+          {
+            "name": "stripe-signature",
+            "in": "header",
+            "description": "Stripe HMAC signature header. Verifying it is the authentication of this route.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Stripe raw event payload.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body missing or stripe-signature is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 300 requests per minute.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Refused so Stripe redelivers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receive a Stripe payment event",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/shipping/cep/{postalCode}": {
+      "get": {
+        "description": "Resolves street, neighborhood, city, and state from an 8-digit CEP via BrasilAPI/ViaCEP with local caching.",
+        "operationId": "ShippingQuoteController_lookupCep",
+        "parameters": [
+          {
+            "name": "postalCode",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CepResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The postal code is not a well-formed CEP (8 digits).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CEP not found or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded — this route allows 30 requests per minute.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Lookup Brazilian address by postal code (CEP)",
+        "tags": [
+          "shipping"
         ]
       }
     },
@@ -3391,6 +4092,522 @@
         "summary": "Quote freight for the cart",
         "tags": [
           "shipping"
+        ]
+      }
+    },
+    "/integrations": {
+      "get": {
+        "operationId": "IntegrationsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListIntegrationsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.read` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Lista os canais de integração e marketplaces configurados.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/mercadolivre/auth-url": {
+      "get": {
+        "operationId": "IntegrationsController_getMeliAuthUrl",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUrlResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Gera URL de autorização OAuth 2.0 do Mercado Livre com state HMAC-SHA256.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/mercadolivre/callback": {
+      "post": {
+        "operationId": "IntegrationsController_meliCallback",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MercadoLivreCallbackDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationItemResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Troca código de autorização OAuth por tokens e ativa integração com Mercado Livre.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/mercadolivre/disconnect": {
+      "post": {
+        "operationId": "IntegrationsController_disconnectMeli",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisconnectIntegrationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Desconecta e revoga credenciais da integração com Mercado Livre.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/mercadolivre/sync": {
+      "post": {
+        "operationId": "IntegrationsController_syncMeliCatalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSyncResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Dispara sincronização manual de catálogo e estoque para o Mercado Livre.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/mercadolivre/webhook": {
+      "post": {
+        "operationId": "IntegrationsController_meliWebhook",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MercadoLivreWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receptor público de webhooks do Mercado Livre para tópicos orders e items.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/auth-url": {
+      "get": {
+        "operationId": "IntegrationsController_getShopeeAuthUrl",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUrlResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Gera URL de autorização Shopee Open Platform (/api/v2/shop/auth_partner) com assinatura HMAC-SHA256.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/callback": {
+      "post": {
+        "operationId": "IntegrationsController_shopeeCallback",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShopeeCallbackDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationItemResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Troca código de autorização por tokens da Shopee e ativa integração em tenant_integrations.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/disconnect": {
+      "post": {
+        "operationId": "IntegrationsController_disconnectShopee",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisconnectIntegrationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Desconecta e revoga credenciais da integração com a Shopee.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/sync": {
+      "post": {
+        "operationId": "IntegrationsController_syncShopeeCatalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSyncResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the token is expired or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the account lacks the `integrations.manage` permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Dispara sincronização manual de catálogo e estoque para a Shopee.",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/integrations/shopee/webhook": {
+      "post": {
+        "operationId": "IntegrationsController_shopeeWebhook",
+        "parameters": [
+          {
+            "name": "authorization",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShopeeWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAckResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Receptor público de push mechanism/webhooks da Shopee para criação/atualização de pedidos.",
+        "tags": [
+          "integrations"
         ]
       }
     },
@@ -4010,6 +5227,51 @@
           "refreshToken"
         ]
       },
+      "CurrentUserResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "9b2f4a1e-0c33-4d7b-9f10-2a5c8e6d41bb"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Ada Lovelace"
+          },
+          "role": {
+            "type": "string",
+            "example": "customer"
+          },
+          "permissions": {
+            "example": [
+              "products.read"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "permissions",
+          "createdAt"
+        ]
+      },
       "StaffGrantResponse": {
         "type": "object",
         "properties": {
@@ -4176,7 +5438,9 @@
               "coupons.update",
               "coupons.delete",
               "reports.read",
-              "staff.manage"
+              "staff.manage",
+              "integrations.read",
+              "integrations.manage"
             ],
             "description": "The permission to grant. A key outside the catalogue is a 400.\n\nGranting one the role already carries is allowed and is not pointless: a grant **survives a role change**, so the account keeps it after a demotion. Granting `staff.manage` hands over the ability to hand over everything — see the description of this route.",
             "example": "products.create"
@@ -4207,13 +5471,40 @@
             "type": "number",
             "description": "Stock for THIS size. Zero means sold out, not missing — render the size struck through rather than dropping it.",
             "example": 4
+          },
+          "heightCm": {
+            "type": "number",
+            "nullable": true,
+            "description": "Height in centimetres for cubic freight quoting.",
+            "example": 10
+          },
+          "widthCm": {
+            "type": "number",
+            "nullable": true,
+            "description": "Width in centimetres for cubic freight quoting.",
+            "example": 15
+          },
+          "lengthCm": {
+            "type": "number",
+            "nullable": true,
+            "description": "Length in centimetres for cubic freight quoting.",
+            "example": 20
+          },
+          "isArchived": {
+            "type": "boolean",
+            "description": "Whether this size has been archived and removed from the active storefront.",
+            "example": false
           }
         },
         "required": [
           "id",
           "label",
           "position",
-          "stockQuantity"
+          "stockQuantity",
+          "heightCm",
+          "widthCm",
+          "lengthCm",
+          "isArchived"
         ]
       },
       "ProductCategoryResponse": {
@@ -4384,6 +5675,24 @@
             "default": 0,
             "description": "Stock for this size. Zero is a legitimate starting point — the size exists and has none left.",
             "example": 12
+          },
+          "heightCm": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Height in centimetres for cubic freight quoting.",
+            "example": 10
+          },
+          "widthCm": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Width in centimetres for cubic freight quoting.",
+            "example": 15
+          },
+          "lengthCm": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Length in centimetres for cubic freight quoting.",
+            "example": 20
           }
         },
         "required": [
@@ -4483,19 +5792,37 @@
           "variantIds"
         ]
       },
-      "RenameVariantDto": {
+      "UpdateVariantDto": {
         "type": "object",
         "properties": {
           "label": {
             "type": "string",
             "maxLength": 20,
-            "description": "The new label. Must be unique within the product — a label another size already holds is a 409. Renaming a size to what it already is does nothing and answers 200.\n\n**Placed orders are unaffected**: `OrderItem.variantLabel` is a snapshot taken at purchase. Carts are the opposite and equally deliberate — they hold no snapshot, so a cart line starts showing the new label immediately.",
+            "description": "The new label. Must be unique within the product — a label another size already holds is a 409.",
             "example": "Médio"
+          },
+          "heightCm": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "description": "Height in centimetres for cubic freight quoting.",
+            "example": 10
+          },
+          "widthCm": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "description": "Width in centimetres for cubic freight quoting.",
+            "example": 15
+          },
+          "lengthCm": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 1,
+            "description": "Length in centimetres for cubic freight quoting.",
+            "example": 20
           }
-        },
-        "required": [
-          "label"
-        ]
+        }
       },
       "VariantInCartsResponse": {
         "type": "object",
@@ -4846,12 +6173,33 @@
           "line1": {
             "type": "string",
             "maxLength": 200,
-            "example": "Rua das Flores, 100"
+            "example": "Rua das Flores, 100",
+            "description": "Full address line. Optional if street and number are provided."
           },
           "line2": {
             "type": "string",
             "maxLength": 200,
             "example": "Apto 42"
+          },
+          "street": {
+            "type": "string",
+            "maxLength": 150,
+            "example": "Rua das Flores"
+          },
+          "number": {
+            "type": "string",
+            "maxLength": 20,
+            "example": "100"
+          },
+          "complement": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Apto 42"
+          },
+          "neighborhood": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Centro"
           },
           "city": {
             "type": "string",
@@ -4870,7 +6218,6 @@
           }
         },
         "required": [
-          "line1",
           "city",
           "state",
           "postalCode"
@@ -4894,6 +6241,16 @@
               "embedded"
             ],
             "description": "Which checkout UI to issue. Defaults to the deployment setting, so one instance can serve a web storefront rendering its own checkout and a mobile app opening the hosted one."
+          },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "PIX",
+              "CREDIT_CARD",
+              "STRIPE"
+            ],
+            "description": "Which payment method the buyer selected. PIX routes to Asaas, CREDIT_CARD to Mercado Pago, STRIPE to Stripe/fallback.",
+            "example": "PIX"
           },
           "shippingOptionCode": {
             "type": "string",
@@ -4981,6 +6338,30 @@
           "quantity"
         ]
       },
+      "PixSessionResponse": {
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "string",
+            "description": "The EMV-standard Copia e Cola text string the buyer pastes into their bank app.",
+            "example": "00020126360014BR.GOV.BCB.PIX..."
+          },
+          "encodedImage": {
+            "type": "string",
+            "nullable": true,
+            "description": "Base64-encoded PNG of the dynamic QR Code, ready for <img src=\"...\">. Null when the provider did not return one yet."
+          },
+          "expirationDate": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "payload",
+          "encodedImage",
+          "expirationDate"
+        ]
+      },
       "PaymentSessionResponse": {
         "type": "object",
         "properties": {
@@ -5007,6 +6388,16 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "pix": {
+            "nullable": true,
+            "description": "PIX credentials — only present when the payment method is PIX. Contains the QR Code image and the Copia e Cola EMV payload.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PixSessionResponse"
+              }
+            ]
           }
         },
         "required": [
@@ -5080,6 +6471,26 @@
             "nullable": true,
             "example": "Apto 42"
           },
+          "shippingStreet": {
+            "type": "string",
+            "nullable": true,
+            "example": "Rua das Flores"
+          },
+          "shippingNumber": {
+            "type": "string",
+            "nullable": true,
+            "example": "100"
+          },
+          "shippingComplement": {
+            "type": "string",
+            "nullable": true,
+            "example": "Apto 42"
+          },
+          "shippingNeighborhood": {
+            "type": "string",
+            "nullable": true,
+            "example": "Centro"
+          },
           "shippingCity": {
             "type": "string",
             "example": "Curitiba"
@@ -5118,6 +6529,30 @@
             "type": "string",
             "nullable": true
           },
+          "blingOrderId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Reference ID of the order in Bling ERP for NF-e emission.",
+            "example": "12345678"
+          },
+          "blingExportedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "When the order was successfully exported to Bling ERP."
+          },
+          "labelUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "Temporary download URL for the carrier shipping label PDF.",
+            "example": "https://melhorenvio.com.br/labels/shipment-123.pdf"
+          },
+          "labelPurchasedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "When the shipping label was purchased from the carrier."
+          },
           "paymentRef": {
             "type": "string",
             "nullable": true,
@@ -5150,6 +6585,28 @@
             "type": "string",
             "nullable": true,
             "format": "date-time"
+          },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "PIX",
+              "CREDIT_CARD",
+              "STRIPE"
+            ],
+            "nullable": true,
+            "description": "Which gateway processed this order. PIX=Asaas, CREDIT_CARD=MercadoPago, STRIPE=Stripe. Null for legacy orders.",
+            "example": "PIX"
+          },
+          "pixPayload": {
+            "type": "string",
+            "nullable": true,
+            "description": "The EMV-standard Copia e Cola string for PIX payments. Present on PIX orders — the order page renders this so the buyer can copy-paste into their bank app.",
+            "example": "00020126360014BR.GOV.BCB.PIX..."
+          },
+          "pixQrCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Base64-encoded PNG of the dynamic PIX QR Code. Present on PIX orders when the provider returned an image. Render with <img src=\"data:image/png;base64,...\" />."
           },
           "paidAt": {
             "type": "string",
@@ -5201,6 +6658,10 @@
           "items",
           "shippingLine1",
           "shippingLine2",
+          "shippingStreet",
+          "shippingNumber",
+          "shippingComplement",
+          "shippingNeighborhood",
           "shippingCity",
           "shippingState",
           "shippingPostalCode",
@@ -5234,6 +6695,16 @@
               "embedded"
             ],
             "description": "Everything here is optional — asking for a way to pay needs no input. A client that renders its own checkout can insist on a mode, which decides whether an existing session is handed back or replaced."
+          },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "PIX",
+              "CREDIT_CARD",
+              "STRIPE"
+            ],
+            "description": "Override the payment method for the new session. Omit to reuse the method chosen at checkout.",
+            "example": "PIX"
           }
         }
       },
@@ -5301,6 +6772,26 @@
             "nullable": true,
             "example": "Apto 42"
           },
+          "shippingStreet": {
+            "type": "string",
+            "nullable": true,
+            "example": "Rua das Flores"
+          },
+          "shippingNumber": {
+            "type": "string",
+            "nullable": true,
+            "example": "100"
+          },
+          "shippingComplement": {
+            "type": "string",
+            "nullable": true,
+            "example": "Apto 42"
+          },
+          "shippingNeighborhood": {
+            "type": "string",
+            "nullable": true,
+            "example": "Centro"
+          },
           "shippingCity": {
             "type": "string",
             "example": "Curitiba"
@@ -5339,6 +6830,30 @@
             "type": "string",
             "nullable": true
           },
+          "blingOrderId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Reference ID of the order in Bling ERP for NF-e emission.",
+            "example": "12345678"
+          },
+          "blingExportedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "When the order was successfully exported to Bling ERP."
+          },
+          "labelUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "Temporary download URL for the carrier shipping label PDF.",
+            "example": "https://melhorenvio.com.br/labels/shipment-123.pdf"
+          },
+          "labelPurchasedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "When the shipping label was purchased from the carrier."
+          },
           "paymentRef": {
             "type": "string",
             "nullable": true,
@@ -5371,6 +6886,28 @@
             "type": "string",
             "nullable": true,
             "format": "date-time"
+          },
+          "paymentMethod": {
+            "type": "string",
+            "enum": [
+              "PIX",
+              "CREDIT_CARD",
+              "STRIPE"
+            ],
+            "nullable": true,
+            "description": "Which gateway processed this order. PIX=Asaas, CREDIT_CARD=MercadoPago, STRIPE=Stripe. Null for legacy orders.",
+            "example": "PIX"
+          },
+          "pixPayload": {
+            "type": "string",
+            "nullable": true,
+            "description": "The EMV-standard Copia e Cola string for PIX payments. Present on PIX orders — the order page renders this so the buyer can copy-paste into their bank app.",
+            "example": "00020126360014BR.GOV.BCB.PIX..."
+          },
+          "pixQrCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Base64-encoded PNG of the dynamic PIX QR Code. Present on PIX orders when the provider returned an image. Render with <img src=\"data:image/png;base64,...\" />."
           },
           "paidAt": {
             "type": "string",
@@ -5412,6 +6949,10 @@
           "items",
           "shippingLine1",
           "shippingLine2",
+          "shippingStreet",
+          "shippingNumber",
+          "shippingComplement",
+          "shippingNeighborhood",
           "shippingCity",
           "shippingState",
           "shippingPostalCode",
@@ -5432,6 +6973,48 @@
           "cancelledAt",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "OrderStatusCountsResponse": {
+        "type": "object",
+        "properties": {
+          "all": {
+            "type": "number",
+            "example": 10
+          },
+          "CREATED": {
+            "type": "number",
+            "example": 4
+          },
+          "PAID": {
+            "type": "number",
+            "example": 3
+          },
+          "SHIPPED": {
+            "type": "number",
+            "example": 2
+          },
+          "DELIVERED": {
+            "type": "number",
+            "example": 1
+          },
+          "CANCELLED": {
+            "type": "number",
+            "example": 0
+          },
+          "REFUNDED": {
+            "type": "number",
+            "example": 0
+          }
+        },
+        "required": [
+          "all",
+          "CREATED",
+          "PAID",
+          "SHIPPED",
+          "DELIVERED",
+          "CANCELLED",
+          "REFUNDED"
         ]
       },
       "PaginatedOrdersResponse": {
@@ -5455,13 +7038,22 @@
             "type": "number",
             "description": "Clamped to 100.",
             "example": 20
+          },
+          "statusCounts": {
+            "description": "Counts broken down by status for the current scope.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderStatusCountsResponse"
+              }
+            ]
           }
         },
         "required": [
           "items",
           "total",
           "page",
-          "perPage"
+          "perPage",
+          "statusCounts"
         ]
       },
       "ShipOrderDto": {
@@ -5480,38 +7072,6 @@
             "example": "https://rastreamento.correios.com.br/BR123456789BR"
           }
         }
-      },
-      "WebhookAckResponse": {
-        "type": "object",
-        "properties": {
-          "received": {
-            "type": "boolean",
-            "example": true,
-            "description": "Always true; a failure is a non-2xx."
-          },
-          "duplicate": {
-            "type": "boolean",
-            "example": false,
-            "description": "True when this event id had already been processed. Redelivery is normal and is not an error — the event is simply not applied twice."
-          }
-        },
-        "required": [
-          "received",
-          "duplicate"
-        ]
-      },
-      "ShippingQuoteDto": {
-        "type": "object",
-        "properties": {
-          "postalCode": {
-            "type": "string",
-            "description": "Destination CEP, 8 digits, hyphen optional. The only input a quote needs: in Brazil the postal code determines city and state, and it is what carriers price against.",
-            "example": "80000-000"
-          }
-        },
-        "required": [
-          "postalCode"
-        ]
       },
       "ShippingOptionResponse": {
         "type": "object",
@@ -5555,6 +7115,82 @@
           "orderTotalCents"
         ]
       },
+      "PurchaseLabelDto": {
+        "type": "object",
+        "properties": {
+          "serviceCode": {
+            "type": "string",
+            "description": "The carrier service code to purchase the label for. Formatted as \"melhorenvio.{service_id}\".",
+            "example": "melhorenvio.1",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "serviceCode"
+        ]
+      },
+      "WebhookAckResponse": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "example": true
+          },
+          "action": {
+            "type": "string",
+            "example": "order_imported_successfully"
+          }
+        },
+        "required": [
+          "received",
+          "action"
+        ]
+      },
+      "CepResponse": {
+        "type": "object",
+        "properties": {
+          "postalCode": {
+            "type": "string",
+            "example": "01310-200"
+          },
+          "street": {
+            "type": "string",
+            "example": "Avenida Paulista"
+          },
+          "neighborhood": {
+            "type": "string",
+            "example": "Bela Vista"
+          },
+          "city": {
+            "type": "string",
+            "example": "São Paulo"
+          },
+          "state": {
+            "type": "string",
+            "example": "SP"
+          }
+        },
+        "required": [
+          "postalCode",
+          "street",
+          "neighborhood",
+          "city",
+          "state"
+        ]
+      },
+      "ShippingQuoteDto": {
+        "type": "object",
+        "properties": {
+          "postalCode": {
+            "type": "string",
+            "description": "Destination CEP, 8 digits, hyphen optional. The only input a quote needs: in Brazil the postal code determines city and state, and it is what carriers price against.",
+            "example": "80000-000"
+          }
+        },
+        "required": [
+          "postalCode"
+        ]
+      },
       "ShippingQuoteResponse": {
         "type": "object",
         "properties": {
@@ -5573,6 +7209,217 @@
         "required": [
           "options",
           "itemsSubtotalCents"
+        ]
+      },
+      "IntegrationItemResponse": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "example": "MERCADO_LIVRE"
+          },
+          "connected": {
+            "type": "boolean",
+            "example": true
+          },
+          "status": {
+            "type": "string",
+            "example": "ACTIVE",
+            "enum": [
+              "ACTIVE",
+              "DISCONNECTED",
+              "ERROR"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "example": "2026-10-06T18:00:00.000Z",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {
+              "userId": 123456,
+              "nickname": "LOJA_OFICIAL_ML"
+            },
+            "nullable": true
+          }
+        },
+        "required": [
+          "provider",
+          "connected",
+          "status",
+          "expiresAt",
+          "metadata"
+        ]
+      },
+      "ListIntegrationsResponse": {
+        "type": "object",
+        "properties": {
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationItemResponse"
+            }
+          }
+        },
+        "required": [
+          "integrations"
+        ]
+      },
+      "AuthUrlResponse": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "example": "https://auth.mercadolivre.com.br/authorization?response_type=code&client_id=123&redirect_uri=..."
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "MercadoLivreCallbackDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Código de autorização temporário emitido pelo Mercado Livre após consentimento.",
+            "example": "TG-65f1234567890abcdef"
+          },
+          "state": {
+            "type": "string",
+            "description": "Parâmetro state assinado com HMAC-SHA256 para prevenção de CSRF.",
+            "example": "eyJ0ZW5hbnRJZCI6ImRlZmF1bHQiLCJub25jZSI6ImFiY2RlZiIsInRpbWVzdGFtcCI6MTY5NjYwMDAwMDAwMCwic2lnIjoiMTIzNDU2In0"
+          }
+        },
+        "required": [
+          "code",
+          "state"
+        ]
+      },
+      "DisconnectIntegrationResponse": {
+        "type": "object",
+        "properties": {
+          "disconnected": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "disconnected"
+        ]
+      },
+      "CatalogSyncResponse": {
+        "type": "object",
+        "properties": {
+          "syncedProducts": {
+            "type": "number",
+            "example": 5
+          },
+          "totalVariants": {
+            "type": "number",
+            "example": 12
+          }
+        },
+        "required": [
+          "syncedProducts",
+          "totalVariants"
+        ]
+      },
+      "MercadoLivreWebhookDto": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "Tópico de notificação disparado pelo Mercado Livre (ex: orders_v2, orders, items).",
+            "example": "orders_v2"
+          },
+          "resource": {
+            "type": "string",
+            "description": "Recurso modificado no Mercado Livre (ex: /orders/2000001234567890).",
+            "example": "/orders/2000001234567890"
+          },
+          "user_id": {
+            "type": "number",
+            "description": "Identificador numérico do vendedor (usuário) no Mercado Livre.",
+            "example": 123456789
+          },
+          "application_id": {
+            "type": "number",
+            "description": "Identificador do aplicativo no Mercado Livre.",
+            "example": 987654321
+          },
+          "_id": {
+            "type": "string",
+            "description": "Identificador único do evento no Mercado Livre.",
+            "example": "evt_1234567890"
+          }
+        },
+        "required": [
+          "topic",
+          "resource",
+          "user_id"
+        ]
+      },
+      "ShopeeCallbackDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Código de autorização temporário emitido pela Shopee Open Platform após consentimento.",
+            "example": "sp_auth_code_987654321"
+          },
+          "shop_id": {
+            "type": "number",
+            "description": "Identificador numérico da loja (shop_id) na Shopee.",
+            "example": 654321
+          },
+          "state": {
+            "type": "string",
+            "description": "Parâmetro state assinado com HMAC-SHA256 para prevenção de CSRF.",
+            "example": "eyJ0ZW5hbnRJZCI6ImRlZmF1bHQiLCJub25jZSI6ImFiY2RlZiIsInRpbWVzdGFtcCI6MTY5NjYwMDAwMDAwMCwic2lnIjoiMTIzNDU2In0"
+          }
+        },
+        "required": [
+          "code",
+          "shop_id"
+        ]
+      },
+      "ShopeeWebhookDto": {
+        "type": "object",
+        "properties": {
+          "shop_id": {
+            "type": "number",
+            "description": "Identificador numérico da loja (shop_id) na Shopee.",
+            "example": 654321
+          },
+          "code": {
+            "type": "number",
+            "description": "Código numérico do evento disparado pela Shopee (3 = Order Update, 2 = Item Update, 4 = Tracking Update).",
+            "example": 3
+          },
+          "timestamp": {
+            "type": "number",
+            "description": "Timestamp Unix (em segundos) do envio da notificação push.",
+            "example": 1696600000
+          },
+          "data": {
+            "type": "object",
+            "description": "Carga útil específica do evento (ex: ordersn, status, etc.).",
+            "example": {
+              "ordersn": "230928ABCDEF1234",
+              "status": "READY_TO_SHIP",
+              "update_time": 1696600000
+            }
+          }
+        },
+        "required": [
+          "shop_id",
+          "code",
+          "timestamp",
+          "data"
         ]
       },
       "ProductSalesRowResponse": {
@@ -5696,6 +7543,37 @@
           "orderCount"
         ]
       },
+      "RevenueTotalsResponse": {
+        "type": "object",
+        "properties": {
+          "revenueCents": {
+            "type": "number",
+            "description": "Total revenue in cents for the entire period.",
+            "example": 59920
+          },
+          "itemsSubtotalCents": {
+            "type": "number",
+            "description": "Total goods subtotal in cents for the entire period.",
+            "example": 55930
+          },
+          "shippingCents": {
+            "type": "number",
+            "description": "Total shipping in cents for the entire period.",
+            "example": 3990
+          },
+          "orderCount": {
+            "type": "number",
+            "description": "Total paid orders in the entire period.",
+            "example": 4
+          }
+        },
+        "required": [
+          "revenueCents",
+          "itemsSubtotalCents",
+          "shippingCents",
+          "orderCount"
+        ]
+      },
       "RevenueReportResponse": {
         "type": "object",
         "properties": {
@@ -5728,6 +7606,14 @@
             "items": {
               "$ref": "#/components/schemas/RevenueBucketResponse"
             }
+          },
+          "totals": {
+            "description": "Aggregated totals across the entire period.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RevenueTotalsResponse"
+              }
+            ]
           }
         },
         "required": [
@@ -5735,7 +7621,8 @@
           "to",
           "granularity",
           "timeZone",
-          "buckets"
+          "buckets",
+          "totals"
         ]
       },
       "CartsReportResponse": {

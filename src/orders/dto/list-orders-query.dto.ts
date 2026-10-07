@@ -1,6 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsUUID, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+} from 'class-validator';
 
 import { OrderStatus } from '../../generated/prisma/enums';
 
@@ -45,4 +52,12 @@ export class ListOrdersQueryDto {
   @IsOptional()
   @IsUUID()
   userId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Search by order UUID prefix, customer name, or customer email.',
+  })
+  @IsOptional()
+  @IsString()
+  search?: string;
 }

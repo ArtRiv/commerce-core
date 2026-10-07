@@ -81,6 +81,7 @@ describe('StockService', () => {
       ];
       expect(args.where).toEqual({
         id: 'variant-1',
+        isArchived: false,
         stockQuantity: { gte: 2 },
         product: { status: ProductStatus.ACTIVE },
       });

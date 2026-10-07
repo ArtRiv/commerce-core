@@ -5,29 +5,48 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import type { AuthenticatedUser } from '../auth/authenticated-user';
 import { PERMISSIONS } from '../auth/authz/permissions';
 import { ProductsService } from '../catalog/products.service';
 import { StockService } from '../catalog/stock.service';
+import {
+  type CanonicalOrder,
+  ERP_SERVICE,
+  type ErpService,
+} from '../erp/erp-service';
 import type { Prisma } from '../generated/prisma/client';
 import { OrderStatus, ProductStatus } from '../generated/prisma/enums';
+import { MercadoLivreSyncService } from '../integrations/mercadolivre/mercadolivre-sync.service';
+import { ShopeeSyncService } from '../integrations/shopee/shopee-sync.service';
 import {
   type CheckoutMode,
   PAYMENT_PROVIDER,
+  type PaymentBuyer,
+  type PaymentMethod,
   type PaymentProvider,
   type PaymentSession,
 } from '../payments/payment-provider';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  SHIPPING_LABEL_SERVICE,
+  type ShippingLabelProvider,
+} from '../shipping/shipping-label.service';
 import { itemsSubtotalCents } from './money';
 import { OrderNotificationsService } from './order-notifications.service';
 import { ShippingQuoteService } from './shipping-quote.service';
 
 export interface ShippingAddress {
-  line1: string;
+  line1?: string;
   line2?: string;
+  street?: string;
+  number?: string;
+  complement?: string;
+  neighborhood?: string;
   city: string;
   state: string;
   postalCode: string;
@@ -36,6 +55,8 @@ export interface ShippingAddress {
 export interface OrderTracking {
   trackingCode?: string;
   trackingUrl?: string;
+  labelUrl?: string;
+  labelPurchasedAt?: Date;
 }
 
 export interface CheckoutInput {
@@ -45,6 +66,10 @@ export interface CheckoutInput {
   /** What they were shown. Compared with a fresh quote, never charged. */
   quotedShippingCents: number;
   paymentMode?: CheckoutMode;
+  /** Which gateway to use. Defaults to STRIPE for backward compatibility. */
+  paymentMethod?: PaymentMethod;
+  /** Buyer details forwarded to national gateways for customer creation. */
+  buyer?: PaymentBuyer;
 }
 
 export interface ListOrdersInput {
@@ -53,6 +78,7 @@ export interface ListOrdersInput {
   status?: OrderStatus;
   /** Callers without orders.read are refused this filter with a 403. */
   userId?: string;
+  search?: string;
 }
 
 /**
@@ -66,6 +92,7 @@ export interface PaymentSessionView {
   url: string | null;
   clientSecret: string | null;
   expiresAt: Date;
+  pix?: PaymentSession['pix'];
 }
 
 /** The little an order needs to expose for a payment session to be issued. */
@@ -73,6 +100,8 @@ interface PayableOrder {
   id: string;
   totalCents: number;
   paymentRef: string | null;
+  /** Already-stored payment method — used when /pay is called without a new method. */
+  paymentMethod?: string | null;
 }
 
 /**
@@ -200,6 +229,7 @@ function toView(session: PaymentSession): PaymentSessionView {
     url: session.url,
     clientSecret: session.clientSecret,
     expiresAt: session.expiresAt,
+    pix: session.pix,
   };
 }
 
@@ -229,6 +259,12 @@ export class OrdersService {
     // latency and buys an ordered, observable send instead of a floating
     // promise that rejects after the response has gone out.
     private readonly notifications: OrderNotificationsService,
+    @Inject(ERP_SERVICE) private readonly erp: ErpService,
+    @Inject(SHIPPING_LABEL_SERVICE)
+    private readonly shippingLabel: ShippingLabelProvider,
+    private readonly config: ConfigService,
+    @Optional() private readonly meliSync?: MercadoLivreSyncService,
+    @Optional() private readonly shopeeSync?: ShopeeSyncService,
   ) {}
 
   async checkout(userId: string, input: CheckoutInput) {
@@ -273,6 +309,9 @@ export class OrdersService {
         quantity: item.quantity,
         unitPriceCents: variant?.product.priceCents ?? 0,
         weightGrams: variant?.product.weightGrams ?? null,
+        heightCm: variant?.heightCm ?? null,
+        widthCm: variant?.widthCm ?? null,
+        lengthCm: variant?.lengthCm ?? null,
       };
     });
 
@@ -333,8 +372,16 @@ export class OrdersService {
           // The amount charged. A CHECK constraint holds this identity in the
           // database too, so no future write can put the three out of step.
           totalCents: subtotalCents + shipping.priceCents,
-          shippingLine1: address.line1,
-          shippingLine2: address.line2 ?? null,
+          shippingStreet: address.street ?? null,
+          shippingNumber: address.number ?? null,
+          shippingComplement: address.complement ?? address.line2 ?? null,
+          shippingNeighborhood: address.neighborhood ?? null,
+          shippingLine1:
+            address.line1 ??
+            (address.street && address.number
+              ? `${address.street}, ${address.number}${address.neighborhood ? ' - ' + address.neighborhood : ''}`
+              : ''),
+          shippingLine2: address.line2 ?? address.complement ?? null,
           shippingCity: address.city,
           shippingState: address.state,
           shippingPostalCode: address.postalCode,
@@ -364,6 +411,33 @@ export class OrdersService {
       });
     });
 
+    // Sincroniza atômica e assincronamente os saldos com marketplaces integrados (Mercado Livre e Shopee)
+    if (this.meliSync || this.shopeeSync) {
+      for (const item of created.items) {
+        const variant = byId.get(item.variantId);
+        const remaining = (variant?.stockQuantity ?? 0) - item.quantity;
+        const remainingSafe = Math.max(0, remaining);
+        if (this.meliSync) {
+          this.meliSync
+            .syncVariantStock(item.variantId, remainingSafe)
+            .catch((err: unknown) => {
+              this.logger.warn(
+                `Erro assíncrono ao sincronizar estoque com Mercado Livre pós-checkout: ${describe(err)}`,
+              );
+            });
+        }
+        if (this.shopeeSync) {
+          this.shopeeSync
+            .syncVariantStock(item.variantId, remainingSafe)
+            .catch((err: unknown) => {
+              this.logger.warn(
+                `Erro assíncrono ao sincronizar estoque com Shopee pós-checkout: ${describe(err)}`,
+              );
+            });
+        }
+      }
+    }
+
     // Outside the transaction on purpose: an external call must not hold DB
     // locks. And a failure here does NOT undo the checkout — the order exists,
     // the stock is committed, and only the way to pay is missing. Same stance
@@ -372,7 +446,11 @@ export class OrdersService {
     // route is POST /orders/:id/pay.
     let payment: PaymentSessionView | null = null;
     try {
-      payment = await this.issueSession(created, input.paymentMode);
+      payment = await this.issueSession(created, {
+        mode: input.paymentMode,
+        method: input.paymentMethod,
+        buyer: input.buyer,
+      });
     } catch (error: unknown) {
       this.logger.error(
         `Order ${created.id} was created but the payment provider failed: ${describe(error)}`,
@@ -394,7 +472,12 @@ export class OrdersService {
    * expired. It is also where the double-charge risk is managed — an order
    * with an open session gets that same session back rather than a second one.
    */
-  async pay(user: AuthenticatedUser, id: string, mode?: CheckoutMode) {
+  async pay(
+    user: AuthenticatedUser,
+    id: string,
+    mode?: CheckoutMode,
+    method?: PaymentMethod,
+  ) {
     const canReadAll = user.permissions.has(PERMISSIONS.ORDERS_READ);
     const canPayAny = user.permissions.has(PERMISSIONS.ORDERS_UPDATE_STATUS);
 
@@ -420,9 +503,17 @@ export class OrdersService {
       );
     }
 
+    // Use the explicitly requested method, or fall back to what was stored at
+    // checkout, or default to STRIPE for backward compatibility.
+    const resolvedMethod =
+      method ?? (order.paymentMethod as PaymentMethod | null) ?? undefined;
+
     let payment: PaymentSessionView;
     try {
-      payment = await this.issueSession(order, mode);
+      payment = await this.issueSession(order, {
+        mode,
+        method: resolvedMethod,
+      });
     } catch (error: unknown) {
       // A refusal from issueSession is a deliberate answer about this order's
       // state — already paid at the provider, or no longer awaiting payment —
@@ -464,16 +555,29 @@ export class OrdersService {
       Math.max(1, Math.trunc(query.perPage ?? 20)),
     );
 
-    const where: Prisma.OrderWhereInput = {
+    const baseWhere: Prisma.OrderWhereInput = {
       ...(canReadAll
         ? query.userId
           ? { userId: query.userId }
           : {}
         : { userId: user.id }),
+    };
+
+    if (query.search && query.search.trim().length > 0) {
+      const search = query.search.trim();
+      baseWhere.OR = [
+        { id: { contains: search, mode: 'insensitive' } },
+        { user: { name: { contains: search, mode: 'insensitive' } } },
+        { user: { email: { contains: search, mode: 'insensitive' } } },
+      ];
+    }
+
+    const where: Prisma.OrderWhereInput = {
+      ...baseWhere,
       ...(query.status ? { status: query.status } : {}),
     };
 
-    const [items, total] = await Promise.all([
+    const [items, total, countsByStatus] = await Promise.all([
       this.prisma.order.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -482,7 +586,28 @@ export class OrdersService {
         include: ORDER_INCLUDE,
       }),
       this.prisma.order.count({ where }),
+      this.prisma.order.groupBy({
+        by: ['status'],
+        where: baseWhere,
+        _count: { id: true },
+      }),
     ]);
+
+    const statusCounts = {
+      all: 0,
+      [OrderStatus.CREATED]: 0,
+      [OrderStatus.PAID]: 0,
+      [OrderStatus.SHIPPED]: 0,
+      [OrderStatus.DELIVERED]: 0,
+      [OrderStatus.CANCELLED]: 0,
+      [OrderStatus.REFUNDED]: 0,
+    };
+
+    for (const group of countsByStatus) {
+      const count = group._count.id;
+      statusCounts[group.status] = count;
+      statusCounts.all += count;
+    }
 
     const visible = canSeeBuyer(user);
 
@@ -491,6 +616,7 @@ export class OrdersService {
       total,
       page,
       perPage,
+      statusCounts,
     };
   }
 
@@ -659,7 +785,7 @@ export class OrdersService {
     paymentIntentRef?: string,
     viewer?: AuthenticatedUser,
   ) {
-    const order = await this.transition(
+    await this.transition(
       id,
       OrderStatus.CREATED,
       OrderStatus.PAID,
@@ -674,7 +800,10 @@ export class OrdersService {
     // never arrives here, so the buyer is thanked exactly once.
     await this.notifications.orderPaid(id);
 
-    return order;
+    // Automatic export to Bling ERP for NF-e emission.
+    await this.exportToBlingQuietly(id);
+
+    return this.getById(id, canSeeBuyer(viewer));
   }
 
   /**
@@ -699,6 +828,10 @@ export class OrdersService {
           ? { trackingCode: tracking.trackingCode }
           : {}),
         ...(tracking.trackingUrl ? { trackingUrl: tracking.trackingUrl } : {}),
+        ...(tracking.labelUrl ? { labelUrl: tracking.labelUrl } : {}),
+        ...(tracking.labelPurchasedAt
+          ? { labelPurchasedAt: tracking.labelPurchasedAt }
+          : {}),
       },
       viewer,
     );
@@ -708,6 +841,136 @@ export class OrdersService {
     await this.notifications.orderShipped(id);
 
     return order;
+  }
+
+  /**
+   * Purchases a shipping label for a PAID order via Melhor Envio, stamps the
+   * tracking code and label download URL, and transitions the order to SHIPPED.
+   */
+  async purchaseLabel(
+    id: string,
+    serviceCode: string,
+    viewer?: AuthenticatedUser,
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: {
+        ...ORDER_INCLUDE,
+        items: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.status !== OrderStatus.PAID) {
+      throw new ConflictException(
+        `Order is ${order.status}; only a PAID order can have a shipping label purchased`,
+      );
+    }
+
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: order.items.map((i) => i.variantId) } },
+      include: { product: { select: { weightGrams: true } } },
+    });
+    const variantMap = new Map(variants.map((v) => [v.id, v]));
+
+    let totalWeightGrams = 0;
+    let maxHeightCm = 2;
+    let maxWidthCm = 11;
+    let maxLengthCm = 16;
+
+    for (const item of order.items) {
+      const v = variantMap.get(item.variantId);
+      const weight = v?.product.weightGrams ?? 500;
+      totalWeightGrams += weight * item.quantity;
+      if (v?.heightCm && v.heightCm > maxHeightCm) maxHeightCm = v.heightCm;
+      if (v?.widthCm && v.widthCm > maxWidthCm) maxWidthCm = v.widthCm;
+      if (v?.lengthCm && v.lengthCm > maxLengthCm) maxLengthCm = v.lengthCm;
+    }
+
+    const originCep =
+      this.config.get<string>('MELHOR_ENVIO_ORIGIN_CEP')?.trim() ?? '01001000';
+    const originName =
+      this.config.get<string>('MELHOR_ENVIO_FROM_NAME')?.trim() ??
+      'Avesso Store';
+    const originPhone =
+      this.config.get<string>('MELHOR_ENVIO_FROM_PHONE')?.trim() ??
+      '11999999999';
+
+    const purchased = await this.shippingLabel.purchase({
+      orderId: order.id,
+      serviceCode,
+      totalWeightGrams,
+      heightCm: maxHeightCm,
+      widthCm: maxWidthCm,
+      lengthCm: maxLengthCm,
+      insuranceValueBrl: order.itemsSubtotalCents / 100,
+      origin: {
+        postalCode: originCep,
+        name: originName,
+        phone: originPhone,
+      },
+      destination: {
+        postalCode: order.shippingPostalCode,
+        name: order.user.name ?? order.user.email,
+        address: order.shippingStreet ?? order.shippingLine1,
+        number: order.shippingNumber ?? 'S/N',
+        complement: order.shippingComplement ?? '',
+        neighborhood: order.shippingNeighborhood ?? '',
+        city: order.shippingCity,
+        stateAbbr: order.shippingState,
+      },
+    });
+
+    return this.ship(
+      id,
+      {
+        trackingCode: purchased.trackingCode,
+        labelUrl: purchased.labelUrl,
+        labelPurchasedAt: new Date(),
+      },
+      viewer,
+    );
+  }
+
+  /**
+   * Quotes available shipping options for an existing order by reading its
+   * destination CEP and calculating current package dimensions/weights.
+   */
+  async quoteForOrder(id: string, viewer?: AuthenticatedUser) {
+    const order = viewer
+      ? await this.findOne(viewer, id)
+      : await this.prisma.order.findUnique({
+          where: { id },
+          include: ORDER_INCLUDE,
+        });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const variants = await this.prisma.productVariant.findMany({
+      where: { id: { in: order.items.map((i) => i.variantId) } },
+      include: { product: { select: { weightGrams: true } } },
+    });
+    const byId = new Map(variants.map((v) => [v.id, v]));
+
+    const lines = order.items.map((item) => {
+      const variant = byId.get(item.variantId);
+      return {
+        productId: item.productId,
+        quantity: item.quantity,
+        unitPriceCents: item.unitPriceCents,
+        weightGrams: variant?.product.weightGrams ?? null,
+        heightCm: variant?.heightCm ?? null,
+        widthCm: variant?.widthCm ?? null,
+        lengthCm: variant?.lengthCm ?? null,
+      };
+    });
+
+    return this.shipping.quote(order.shippingPostalCode, lines);
   }
 
   deliver(id: string, viewer?: AuthenticatedUser) {
@@ -738,8 +1001,14 @@ export class OrdersService {
    */
   private async issueSession(
     order: PayableOrder,
-    mode?: CheckoutMode,
+    opts: {
+      mode?: CheckoutMode;
+      method?: PaymentMethod;
+      buyer?: PaymentBuyer;
+    } = {},
   ): Promise<PaymentSessionView> {
+    const { mode, method, buyer } = opts;
+
     if (order.paymentRef) {
       const existing = await this.payments.getPayment(order.paymentRef);
 
@@ -767,6 +1036,8 @@ export class OrdersService {
       orderId: order.id,
       amountCents: order.totalCents,
       mode,
+      method,
+      buyer,
     });
 
     const { count } = await this.prisma.order.updateMany({
@@ -775,6 +1046,15 @@ export class OrdersService {
         paymentRef: session.providerRef,
         paymentUrl: session.url,
         paymentExpiresAt: session.expiresAt,
+        // Persist the method so /pay can re-route correctly without the buyer
+        // having to re-select it. Also persist PIX credentials for rendering.
+        ...(session.method ? { paymentMethod: session.method } : {}),
+        ...(session.pix
+          ? {
+              pixPayload: session.pix.payload,
+              pixQrCode: session.pix.encodedImage,
+            }
+          : {}),
       },
     });
 
@@ -888,5 +1168,61 @@ export class OrdersService {
     }
 
     return withBuyer(order, buyerVisible);
+  }
+
+  private async exportToBlingQuietly(orderId: string): Promise<void> {
+    try {
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: ORDER_INCLUDE,
+      });
+
+      if (!order) return;
+
+      const canonical: CanonicalOrder = {
+        id: order.id,
+        totalCents: order.totalCents,
+        itemsSubtotalCents: order.itemsSubtotalCents,
+        shippingCents: order.shippingCents,
+        shippingMethodName: order.shippingMethodName,
+        paidAt: order.paidAt,
+        buyer: {
+          name: order.user.name,
+          email: order.user.email,
+        },
+        address: {
+          street: order.shippingStreet,
+          number: order.shippingNumber,
+          complement: order.shippingComplement,
+          neighborhood: order.shippingNeighborhood,
+          city: order.shippingCity,
+          state: order.shippingState,
+          postalCode: order.shippingPostalCode,
+        },
+        items: order.items.map((item) => ({
+          variantId: item.variantId,
+          productName: item.productName,
+          variantLabel: item.variantLabel,
+          unitPriceCents: item.unitPriceCents,
+          quantity: item.quantity,
+        })),
+      };
+
+      const result = await this.erp.exportOrder(canonical);
+
+      if (result.erpOrderId && result.erpOrderId !== 'noop') {
+        await this.prisma.order.update({
+          where: { id: orderId },
+          data: {
+            blingOrderId: result.erpOrderId,
+            blingExportedAt: new Date(),
+          },
+        });
+      }
+    } catch (error: unknown) {
+      this.logger.error(
+        `Falha ao exportar pedido ${orderId} para o Bling ERP: ${describe(error)}`,
+      );
+    }
   }
 }

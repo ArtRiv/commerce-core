@@ -34,6 +34,7 @@ import { ApiAuthenticated } from '../openapi/security';
 import { CheckoutDto } from './dto/checkout.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import { PayOrderDto } from './dto/pay-order.dto';
+import { PurchaseLabelDto } from './dto/purchase-label.dto';
 import { ShipOrderDto } from './dto/ship-order.dto';
 import { OrdersService } from './orders.service';
 import { RATE_LIMITS } from './rate-limits';
@@ -42,6 +43,7 @@ import {
   OrderWithPaymentResponse,
   PaginatedOrdersResponse,
 } from './responses/order.response';
+import { ShippingOptionResponse } from './responses/shipping-quote.response';
 
 /** Repeated on every route that takes an :id — an order id is always a UUID. */
 const ORDER_ID = { name: 'id', format: 'uuid' } as const;
@@ -87,6 +89,10 @@ export class OrdersController {
       shippingOptionCode: dto.shippingOptionCode,
       quotedShippingCents: dto.quotedShippingCents,
       paymentMode: dto.paymentMode,
+      paymentMethod: dto.paymentMethod,
+      // Buyer info is required by Asaas for PIX customer creation.
+      // We read it from the authenticated user's context.
+      buyer: { email: user.email, name: user.name },
     });
   }
 
@@ -125,7 +131,7 @@ export class OrdersController {
     @Param('id') id: string,
     @Body() dto: PayOrderDto,
   ) {
-    return this.orders.pay(user, id, dto.paymentMode);
+    return this.orders.pay(user, id, dto.paymentMode, dto.paymentMethod);
   }
 
   @Get()
@@ -264,5 +270,43 @@ export class OrdersController {
   @ApiConflict('The order is not SHIPPED.')
   deliver(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.orders.deliver(id, user);
+  }
+
+  @RequirePermissions(PERMISSIONS.ORDERS_READ)
+  @Get(':id/shipping-quotes')
+  @ApiOperation({
+    summary: 'Quote available shipping rates for an existing order',
+    description:
+      'Calculates real-time carrier shipping rates for an order based on its destination CEP and item weights/dimensions.',
+  })
+  @ApiParam(ORDER_ID)
+  @ApiOkResponse({ type: [ShippingOptionResponse] })
+  @ApiNotFound('No such order.')
+  quoteShipping(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.orders.quoteForOrder(id, user);
+  }
+
+  @RequirePermissions(PERMISSIONS.ORDERS_UPDATE_STATUS)
+  @HttpCode(200)
+  @Post(':id/label')
+  @ApiOperation({
+    summary: 'Purchase a shipping label for a paid order',
+    description:
+      'Purchases a carrier shipping label via Melhor Envio, automatically stamps the tracking code and label download URL, and transitions the order to SHIPPED.',
+  })
+  @ApiParam(ORDER_ID)
+  @ApiOkResponse({ type: OrderResponse })
+  @ApiBadRequest('Invalid service code.')
+  @ApiNotFound('No such order.')
+  @ApiConflict('The order is not PAID.')
+  purchaseLabel(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: PurchaseLabelDto,
+  ) {
+    return this.orders.purchaseLabel(id, dto.serviceCode, user);
   }
 }

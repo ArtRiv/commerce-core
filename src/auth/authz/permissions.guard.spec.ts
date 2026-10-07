@@ -26,7 +26,13 @@ function guardWith(required: Permission[] | undefined): PermissionsGuard {
 }
 
 function userWith(permissions: Permission[]): AuthenticatedUser {
-  return { id: 'user-1', role: 'operator', permissions: new Set(permissions) };
+  return {
+    id: 'user-1',
+    email: 'user@example.com',
+    name: 'User 1',
+    role: 'operator',
+    permissions: new Set(permissions),
+  };
 }
 
 describe('PermissionsGuard', () => {

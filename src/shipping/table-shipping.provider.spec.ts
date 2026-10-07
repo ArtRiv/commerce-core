@@ -207,6 +207,32 @@ describe('TableShippingProvider', () => {
       expect(option.priceCents).toBe(2_990);
     });
 
+    it('sums multi-item quantities and weights to match bracket boundary exactly', async () => {
+      const provider = providerWith([SUDESTE]);
+
+      const [option] = await provider.quote(
+        request({
+          items: [
+            {
+              productId: 'p1',
+              quantity: 3,
+              unitPriceCents: 100,
+              weightGrams: 300,
+            },
+            {
+              productId: 'p2',
+              quantity: 1,
+              unitPriceCents: 100,
+              weightGrams: 100,
+            },
+          ],
+        }),
+      );
+
+      // 3 × 300 + 100 = 1000 g, exactly at the first bracket boundary (inclusive).
+      expect(option.priceCents).toBe(1_990);
+    });
+
     it('drops an option whose ceiling the parcel exceeds', async () => {
       const provider = providerWith([SUDESTE, EXPRESSA_SUDESTE]);
 
@@ -246,6 +272,56 @@ describe('TableShippingProvider', () => {
         ),
       ).resolves.toEqual([]);
     });
+
+    it('uses volumetric weight when cubic grams exceed physical weight', async () => {
+      const provider = providerWith([SUDESTE]);
+
+      // Physical weight is 500g (fits in <= 1000g bracket).
+      // Dimensions: 20 x 20 x 30 cm = 12,000 cm3.
+      // Cubic grams: round(12000 / 6) = 2000g, which bumps parcel to the 10,000g bracket.
+      const [option] = await provider.quote(
+        request({
+          items: [
+            {
+              productId: 'p1',
+              quantity: 1,
+              unitPriceCents: 100,
+              weightGrams: 500,
+              heightCm: 20,
+              widthCm: 20,
+              lengthCm: 30,
+            },
+          ],
+        }),
+      );
+
+      expect(option.priceCents).toBe(2_990);
+    });
+
+    it('uses physical weight when it is greater than volumetric weight', async () => {
+      const provider = providerWith([SUDESTE]);
+
+      // Physical weight is 800g.
+      // Dimensions: 10 x 10 x 10 cm = 1,000 cm3 -> round(1000 / 6) = 167g.
+      // Max(800, 167) = 800g, remains in <= 1000g bracket.
+      const [option] = await provider.quote(
+        request({
+          items: [
+            {
+              productId: 'p1',
+              quantity: 1,
+              unitPriceCents: 100,
+              weightGrams: 800,
+              heightCm: 10,
+              widthCm: 10,
+              lengthCm: 10,
+            },
+          ],
+        }),
+      );
+
+      expect(option.priceCents).toBe(1_990);
+    });
   });
 
   describe('free shipping', () => {
@@ -283,6 +359,28 @@ describe('TableShippingProvider', () => {
       const [option] = await provider.quote(request({ subtotalCents: 5_000 }));
 
       expect(option.priceCents).toBe(0);
+    });
+
+    it('zeroes all prices when threshold is 0, regardless of subtotal', async () => {
+      const provider = providerWith([SUDESTE], 0);
+
+      const [option] = await provider.quote(request({ subtotalCents: 1 }));
+
+      expect(option.priceCents).toBe(0);
+    });
+
+    it('evaluates exact threshold boundaries (subtotal === threshold vs subtotal === threshold - 1)', async () => {
+      const provider = providerWith([SUDESTE], 10_000);
+
+      const [atThreshold] = await provider.quote(
+        request({ subtotalCents: 10_000 }),
+      );
+      const [belowThreshold] = await provider.quote(
+        request({ subtotalCents: 9_999 }),
+      );
+
+      expect(atThreshold.priceCents).toBe(0);
+      expect(belowThreshold.priceCents).toBe(1_990);
     });
 
     it('does nothing when no threshold is configured', async () => {

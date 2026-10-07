@@ -33,6 +33,10 @@ export interface LiveVariant {
   label: string;
   position: number;
   stockQuantity: number;
+  heightCm: number | null;
+  widthCm: number | null;
+  lengthCm: number | null;
+  isArchived: boolean;
 }
 
 export interface CartView {
@@ -117,6 +121,10 @@ export class CartService {
           label: variant.label,
           position: variant.position,
           stockQuantity: variant.stockQuantity,
+          heightCm: variant.heightCm,
+          widthCm: variant.widthCm,
+          lengthCm: variant.lengthCm,
+          isArchived: variant.isArchived,
         },
       };
     });

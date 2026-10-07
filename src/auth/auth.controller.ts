@@ -42,6 +42,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { GoogleOAuthGuard } from './google-oauth.guard';
 import { Public } from './public.decorator';
+import { CurrentUserResponse } from './responses/current-user.response';
 import { RegisteredUserResponse } from './responses/registered-user.response';
 import { TokenPairResponse } from './responses/token-pair.response';
 import { EmailThrottlerGuard } from './throttling/email-throttler.guard';
@@ -257,5 +258,18 @@ export class AuthController {
     @Body() dto: RefreshTokenDto,
   ): Promise<void> {
     return this.auth.logout(user.id, dto.refreshToken);
+  }
+
+  @Get('me')
+  @ApiAuthenticated()
+  @ApiOperation({
+    summary: 'Get current user profile',
+    description:
+      'Returns the authenticated caller’s profile, role, and resolved permissions.',
+  })
+  @ApiOkResponse({ type: CurrentUserResponse })
+  @ApiUnauthorized('Token is missing, expired, or invalid.')
+  me(@CurrentUser() user: AuthenticatedUser): Promise<CurrentUserResponse> {
+    return this.auth.getCurrentUser(user.id);
   }
 }

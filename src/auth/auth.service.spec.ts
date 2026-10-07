@@ -19,8 +19,12 @@ const { EMAIL_VERIFICATION, PASSWORD_RESET } = VerificationTokenPurpose;
 interface StoredUser {
   id: string;
   email: string;
-  passwordHash: string | null;
-  emailVerifiedAt: Date | null;
+  name?: string | null;
+  passwordHash?: string | null;
+  emailVerifiedAt?: Date | null;
+  createdAt?: Date;
+  role?: any;
+  permissionsGrantedToUser?: any[];
 }
 
 interface UserFindArgs {
@@ -722,6 +726,56 @@ describe('AuthService', () => {
         'presented',
       );
       expect(refreshTokens.revokeAllSessions).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getCurrentUser', () => {
+    it('returns the user profile with resolved permissions', async () => {
+      const { service, prisma } = createMocks();
+      const createdAt = new Date();
+
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: 'ada@example.com',
+        name: 'Ada Lovelace',
+        createdAt,
+        role: {
+          name: 'admin',
+          permissions: [
+            { permission: { key: 'products.read' } },
+            { permission: { key: 'products.create' } },
+          ],
+        },
+        permissionsGrantedToUser: [{ permission: { key: 'orders.read' } }],
+      });
+
+      const user = await service.getCurrentUser('user-1');
+
+      expect(user).toEqual({
+        id: 'user-1',
+        email: 'ada@example.com',
+        name: 'Ada Lovelace',
+        role: 'admin',
+        permissions: expect.arrayContaining([
+          'products.read',
+          'products.create',
+          'orders.read',
+        ]),
+        createdAt,
+      });
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        select: expect.any(Object),
+      });
+    });
+
+    it('throws UnauthorizedException when user is not found', async () => {
+      const { service, prisma } = createMocks();
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.getCurrentUser('missing')).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
   });
 });
