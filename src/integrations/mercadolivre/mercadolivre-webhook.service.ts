@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { StockService } from '../../catalog/stock.service';
 import { ERP_SERVICE, type ErpService } from '../../erp/erp-service';
 import { OrderStatus } from '../../generated/prisma/enums';
+import { RequestContextService } from '../../observability/request-context.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AmazonSyncService } from '../amazon/amazon-sync.service';
 import { ShopeeSyncService } from '../shopee/shopee-sync.service';
@@ -51,6 +52,7 @@ export class MercadoLivreWebhookService {
     payload: MercadoLivreWebhookPayload,
     tenantId = 'default',
   ): Promise<WebhookProcessResult> {
+    RequestContextService.setTenantId(tenantId);
     const { topic, resource } = payload;
     this.logger.log(
       `Webhook Mercado Livre recebido: tópico=${topic}, recurso=${resource}`,
@@ -94,6 +96,7 @@ export class MercadoLivreWebhookService {
     });
 
     if (existingOrder) {
+      RequestContextService.setOrderId(existingOrder.id);
       this.logger.log(
         `Pedido Mercado Livre ${meliOrderId} já registrado localmente (Order ID: ${existingOrder.id}).`,
       );
@@ -257,6 +260,8 @@ export class MercadoLivreWebhookService {
         include: { items: true },
       });
     });
+
+    RequestContextService.setOrderId(createdOrder.id);
 
     // Cascata de estoque em tempo real para os demais canais integrados (Shopee e Amazon)
     for (const item of orderItemsToCreate) {

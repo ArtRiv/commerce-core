@@ -12,6 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { StockService } from '../../catalog/stock.service';
 import { ERP_SERVICE, type ErpService } from '../../erp/erp-service';
 import { OrderStatus } from '../../generated/prisma/enums';
+import { RequestContextService } from '../../observability/request-context.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AmazonSyncService } from '../amazon/amazon-sync.service';
 import { ShopeeWebhookDto } from '../dto/shopee-webhook.dto';
@@ -82,6 +83,7 @@ export class ShopeeWebhookService {
     payload: ShopeeWebhookDto,
     tenantId = 'default',
   ): Promise<ShopeeWebhookProcessResult> {
+    RequestContextService.setTenantId(tenantId);
     const { code, shop_id, data } = payload;
     this.logger.log(
       `Push Shopee recebido: code=${code}, shop_id=${shop_id}, data=${JSON.stringify(data ?? {})}`,
@@ -122,6 +124,7 @@ export class ShopeeWebhookService {
     });
 
     if (existingOrder) {
+      RequestContextService.setOrderId(existingOrder.id);
       this.logger.log(
         `Pedido Shopee ${shopeeOrder.order_sn} já importado (Order ID: ${existingOrder.id}).`,
       );
@@ -285,6 +288,8 @@ export class ShopeeWebhookService {
         include: { items: true },
       });
     });
+
+    RequestContextService.setOrderId(createdOrder.id);
 
     // 6. Cascata de estoque em tempo real para os demais marketplaces (Mercado Livre e Amazon)
     for (const item of orderItemsToCreate) {

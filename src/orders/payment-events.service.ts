@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 
 import { OrderStatus } from '../generated/prisma/enums';
+import { RequestContextService } from '../observability/request-context.service';
 import type { PaymentEvent } from '../payments/payment-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrdersService } from './orders.service';
@@ -44,6 +45,7 @@ export class PaymentEventsService {
 
   async handle(event: PaymentEvent): Promise<WebhookOutcome> {
     const orderId = await this.resolveOrderId(event);
+    RequestContextService.setOrderId(orderId);
 
     if (!(await this.claim(event, orderId))) {
       return 'duplicate';

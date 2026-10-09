@@ -36,8 +36,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (!isHttp) {
       this.logger.error(
+        {
+          method: request.method,
+          url: request.url,
+          statusCode: status,
+          err: exception,
+        },
         `Unhandled exception on ${request.method} ${request.url}`,
-        exception instanceof Error ? exception.stack : String(exception),
       );
     }
 
