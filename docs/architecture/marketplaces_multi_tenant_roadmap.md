@@ -153,3 +153,19 @@ Para evitar vendas duplicadas (*overselling*) de itens com estoque baixo quando 
   - Card interativo da Amazon SP-API com conexão em 1-clique via LWA, exibição de Selling Partner ID, Marketplace Brasil (`A2Q3Y263D00KWC`), status de conformidade DPP e sincronização manual.
 - [x] **100% de Qualidade & Testes:**
   - 795 testes unitários Jest no backend (62 suítes, 100% aprovados), 65 testes Vitest no frontend (11 suítes, 100% aprovados), 7/7 testes E2E Playwright reais (100% aprovados) e builds de produção bem-sucedidos em ambos os repositórios.
+
+---
+
+### Sessão 13 — Observabilidade Estruturada com Pino & AsyncLocalStorage — [CONCLUÍDA]
+- [x] **AsyncLocalStorage Context Propagation:**
+  - Módulo `RequestContextService` utilizando `node:async_hooks` nativo do Node.js para propagação de contexto sem acoplamento.
+  - Rastreamento dinâmico e consistente de `tenant_id`, `order_id`, `correlation_id` e `user_id` em todo o ciclo de vida assíncrono.
+  - Middleware `RequestContextMiddleware` para extração e injeção transparente de headers (`x-correlation-id`, `x-tenant-id`, `x-order-id`).
+- [x] **Logging Estruturado de Alta Performance (Pino):**
+  - Implementação `PinoLoggerService` compatível com NestJS `LoggerService`.
+  - Redação automática de dados sensíveis (LGPD / OWASP / PCI-DSS: senhas, tokens, secrets, PII de comprador, CVV, CPF).
+  - Interceptor global `HttpLoggingInterceptor` para métricas automáticas de requisição e latência (`duration_ms`).
+  - Integração em pontos críticos do domínio: `OrdersService`, `PaymentEventsService` e Webhooks de Marketplaces (`MercadoLivre`, `Shopee`, `Amazon`).
+- [x] **100% de Qualidade & Testes:**
+  - 818 testes unitários Jest no backend (68 suítes, 100% aprovados), 65 testes Vitest no frontend (11 suítes, 100% aprovados) e builds de produção bem-sucedidos em ambos os repositórios.
+
