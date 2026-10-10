@@ -10,6 +10,7 @@ import { CatalogModule } from './catalog/catalog.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { MailModule } from './mail/mail.module';
+import { MessagingModule } from './messaging/messaging.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { OrdersModule } from './orders/orders.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -19,6 +20,7 @@ import { ReportsModule } from './reports/reports.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ObservabilityModule,
+    MessagingModule,
     // Baseline global de rate limiting. Cada rota sensível sobrescreve com seu
     // próprio @Throttle. Storage em memória — suficiente para um processo;
     // trocar por Redis é uma mudança aqui e em nenhum outro lugar.
