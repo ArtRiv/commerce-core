@@ -169,3 +169,24 @@ Para evitar vendas duplicadas (*overselling*) de itens com estoque baixo quando 
 - [x] **100% de Qualidade & Testes:**
   - 818 testes unitários Jest no backend (68 suítes, 100% aprovados), 65 testes Vitest no frontend (11 suítes, 100% aprovados) e builds de produção bem-sucedidos em ambos os repositórios.
 
+---
+
+### Sessão 14 — Arquitetura de Mensageria Assíncrona com RabbitMQ — [CONCLUÍDA]
+- [x] **Infraestrutura AMQP & Topologia Resiliente (`MessagingModule`):**
+  - Integração nativa com RabbitMQ via `amqplib` com leitura de `RABBITMQ_URL` e fallback para `amqp://guest:guest@localhost:5672`.
+  - Configuração de topologia: Exchange principal (`commerce.events`), Dead Letter Exchange (`commerce.events.dlx`), Dead Letter Queue (`orders.paid.dlq`) e Fila principal (`orders.paid`).
+  - Inicialização resiliente e desconexão graciosa no `onModuleDestroy`.
+- [x] **Producer Desacoplado & Não-Bloqueante (`OrderEventsProducer`):**
+  - Publicação assíncrona do evento `order.paid` na confirmação de pagamento (`OrdersService.markPaid`).
+  - Resposta HTTP imediata ao cliente/webhook sem retenção síncrona de chamadas externas de e-mail e ERP.
+  - Tolerância a falhas: fallback gracioso síncrono caso o broker esteja indisponível.
+- [x] **Worker / Consumer com Confirmação Manual e Dead Letter Queue (`OrderPaidConsumer`):**
+  - Processamento assíncrono do evento `order.paid`: envio de e-mail de confirmação (`OrderNotificationsService.orderPaid`) e emissão fiscal (`BlingErpService.exportOrder`).
+  - Confirmação manual de mensagens (`channel.ack`).
+  - Política de retries controlada via cabeçalho `x-retries` (até 3 tentativas).
+  - Roteamento para Dead Letter Queue (`orders.paid.dlq`) via `channel.nack(msg, false, false)` em erros permanentes ou excedentes de retries.
+  - Amarração do contexto de observabilidade (`RequestContextService`) com injeção automática de `order_id` e `correlation_id` nos logs estruturados.
+- [x] **100% de Qualidade & Testes:**
+  - 840 testes unitários e de integração Jest no backend (72 suítes, 100% aprovados), zero erros no linter (`eslint --max-warnings=0`), checagem de tipos estrita (`tsc --noEmit`) e build de produção (`nest build`) bem-sucedido.
+
+
