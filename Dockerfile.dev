@@ -1,0 +1,24 @@
+FROM node:22.18.0-bookworm-slim
+
+WORKDIR /app
+
+# Desativa o prompt interativo do corepack ao baixar pnpm
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
+# openssl é necessário para o motor do Prisma no Linux
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && pnpm install
+
+# Copiamos o prisma e geramos o client para o motor Linux
+COPY prisma ./prisma
+COPY tsconfig.json tsconfig.build.json nest-cli.json prisma.config.ts ./
+RUN pnpm exec prisma generate
+
+EXPOSE 3000
+
+# Inicia o NestJS em modo watch (hot-reload)
+CMD ["pnpm", "start:dev"]

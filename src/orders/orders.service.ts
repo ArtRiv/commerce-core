@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import {
   ConflictException,
   ForbiddenException,
@@ -38,6 +40,7 @@ import {
   SHIPPING_LABEL_SERVICE,
   type ShippingLabelProvider,
 } from '../shipping/shipping-label.service';
+import { OrderEventsProducer } from './messaging/order-events.producer';
 import { itemsSubtotalCents } from './money';
 import { OrderNotificationsService } from './order-notifications.service';
 import { ShippingQuoteService } from './shipping-quote.service';
@@ -268,6 +271,7 @@ export class OrdersService {
     @Optional() private readonly meliSync?: MercadoLivreSyncService,
     @Optional() private readonly shopeeSync?: ShopeeSyncService,
     @Optional() private readonly amazonSync?: AmazonSyncService,
+    @Optional() private readonly orderEventsProducer?: OrderEventsProducer,
   ) {}
 
   async checkout(userId: string, input: CheckoutInput) {
@@ -811,14 +815,26 @@ export class OrdersService {
       viewer,
     );
 
-    // Reached only because the conditional UPDATE above changed a row, which
-    // is the whole idempotency story (docs/specs/order-emails.md): a webhook
-    // redelivery that gets past payment_events throws out of transition() and
-    // never arrives here, so the buyer is thanked exactly once.
-    await this.notifications.orderPaid(id);
+    // If an asynchronous event producer is present, publish order.paid
+    // without blocking the HTTP response on external calls (Resend / Bling).
+    if (this.orderEventsProducer) {
+      const published = this.orderEventsProducer.publishOrderPaid({
+        eventId: crypto.randomUUID(),
+        orderId: id,
+        paymentIntentRef,
+        occurredAt: new Date().toISOString(),
+        correlationId: RequestContextService.getCorrelationId(),
+      });
 
-    // Automatic export to Bling ERP for NF-e emission.
-    await this.exportToBlingQuietly(id);
+      if (!published) {
+        // Fallback synchronously if messaging broker was unavailable
+        await this.notifications.orderPaid(id);
+        await this.exportToBlingQuietly(id);
+      }
+    } else {
+      await this.notifications.orderPaid(id);
+      await this.exportToBlingQuietly(id);
+    }
 
     return this.getById(id, canSeeBuyer(viewer));
   }
@@ -1188,7 +1204,7 @@ export class OrdersService {
     return withBuyer(order, buyerVisible);
   }
 
-  private async exportToBlingQuietly(orderId: string): Promise<void> {
+  async exportToBlingQuietly(orderId: string): Promise<void> {
     try {
       const order = await this.prisma.order.findUnique({
         where: { id: orderId },

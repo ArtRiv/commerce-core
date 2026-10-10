@@ -4,10 +4,13 @@ import { CatalogModule } from '../catalog/catalog.module';
 import { ErpModule } from '../erp/erp.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { MailModule } from '../mail/mail.module';
+import { MessagingModule } from '../messaging/messaging.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { ShippingModule } from '../shipping/shipping.module';
 import { CartController } from './cart.controller';
 import { CartService } from './cart.service';
+import { OrderEventsProducer } from './messaging/order-events.producer';
+import { OrderPaidConsumer } from './messaging/order-paid.consumer';
 import { OrderNotificationsService } from './order-notifications.service';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
@@ -44,6 +47,7 @@ import { ShippingQuoteService } from './shipping-quote.service';
     ShippingModule,
     MailModule,
     IntegrationsModule,
+    MessagingModule,
   ],
   controllers: [
     CartController,
@@ -57,6 +61,8 @@ import { ShippingQuoteService } from './shipping-quote.service';
     OrdersService,
     PaymentEventsService,
     ShippingQuoteService,
+    OrderEventsProducer,
+    OrderPaidConsumer,
   ],
 })
 export class OrdersModule {}

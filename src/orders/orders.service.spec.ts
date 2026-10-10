@@ -286,6 +286,7 @@ interface Mocks {
   erp: ErpMock;
   shippingLabel: ShippingLabelMock;
   config: ConfigMock;
+  producer?: { publishOrderPaid: jest.Mock };
 }
 
 function createErpMock(): ErpMock {
@@ -337,6 +338,7 @@ function serviceWith({
   erp = createErpMock(),
   shippingLabel = createShippingLabelMock(),
   config = createConfigMock(),
+  producer,
 }: Partial<Mocks> & {
   prisma: PrismaMock;
   products: ProductsMock;
@@ -347,6 +349,7 @@ function serviceWith({
   erp?: ErpMock;
   shippingLabel?: ShippingLabelMock;
   config?: ConfigMock;
+  producer?: { publishOrderPaid: jest.Mock };
 }) {
   return new OrdersService(
     prisma as unknown as PrismaService,
@@ -363,6 +366,10 @@ function serviceWith({
     erp,
     shippingLabel,
     config as any,
+    undefined,
+    undefined,
+    undefined,
+    producer as any,
   );
 }
 
@@ -1960,6 +1967,59 @@ describe('OrdersService', () => {
       await expect(
         serviceWith(mocks).markPaid('order-1'),
       ).resolves.toBeDefined();
+    });
+  });
+
+  describe('RabbitMQ messaging on markPaid', () => {
+    it('publishes order.paid event via producer when present and delegates emails and ERP to worker', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ id: 'order-1', status: OrderStatus.PAID }),
+      );
+      const producerMock = {
+        publishOrderPaid: jest.fn().mockReturnValue(true),
+      };
+
+      await serviceWith({ ...mocks, producer: producerMock }).markPaid(
+        'order-1',
+        'pi_stripe_123',
+      );
+
+      expect(producerMock.publishOrderPaid).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: 'order-1',
+          paymentIntentRef: 'pi_stripe_123',
+          eventId: expect.any(String),
+          occurredAt: expect.any(String),
+        }),
+      );
+      // Delegated to worker: not awaited synchronously in HTTP request
+      expect(mocks.notifications.orderPaid).not.toHaveBeenCalled();
+      expect(mocks.erp.exportOrder).not.toHaveBeenCalled();
+    });
+
+    it('falls back to synchronous execution when producer returns false (e.g. RabbitMQ is down)', async () => {
+      const mocks = createMocks();
+      mocks.prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      mocks.prisma.order.findUnique.mockResolvedValue(
+        orderRow({ id: 'order-1', status: OrderStatus.PAID }),
+      );
+      const producerMock = {
+        publishOrderPaid: jest.fn().mockReturnValue(false),
+      };
+
+      await serviceWith({ ...mocks, producer: producerMock }).markPaid(
+        'order-1',
+        'pi_stripe_123',
+      );
+
+      expect(producerMock.publishOrderPaid).toHaveBeenCalled();
+      // Fallback executed synchronously so nothing is lost
+      expect(mocks.notifications.orderPaid).toHaveBeenCalledWith('order-1');
+      expect(mocks.erp.exportOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'order-1' }),
+      );
     });
   });
 
