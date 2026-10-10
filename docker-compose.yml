@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: commerce-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: commerce_core
+    ports:
+      # HOST:CONTAINER
+      # Mapeamos a porta 5433 do Windows para a porta 5432 interna do container,
+      # evitando conflito com instâncias nativas do Postgres no seu Windows.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d commerce_core"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: commerce-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: commerce-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"   # Protocolo AMQP (onde a aplicação se conecta)
+      - "15672:15672" # Interface Web de Gestão (acessível pelo navegador)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: commerce-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      # Sobrescreve a DATABASE_URL do .env:
+      # Dentro da rede do Docker, o banco NÃO é localhost:5433,
+      # e sim o nome do serviço 'postgres' na porta interna 5432!
+      DATABASE_URL: "postgresql://postgres:postgrespassword@postgres:5432/commerce_core"
+    volumes:
+      # Bind mount: reflete alterações de arquivos locais em tempo real
+      - .:/app
+      # Volume anônimo: isola os node_modules do Linux contra os do Windows
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    name: commerce_postgres_data
+  redis_data:
+    name: commerce_redis_data
+  rabbitmq_data:
+    name: commerce_rabbitmq_data
