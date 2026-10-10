@@ -24,6 +24,7 @@ import { OrderStatus, ProductStatus } from '../generated/prisma/enums';
 import { AmazonSyncService } from '../integrations/amazon/amazon-sync.service';
 import { MercadoLivreSyncService } from '../integrations/mercadolivre/mercadolivre-sync.service';
 import { ShopeeSyncService } from '../integrations/shopee/shopee-sync.service';
+import { RequestContextService } from '../observability/request-context.service';
 import {
   type CheckoutMode,
   PAYMENT_PROVIDER,
@@ -413,6 +414,9 @@ export class OrdersService {
       });
     });
 
+    // Registra order_id no AsyncLocalStorage para enriquecer todos os logs subsequentes
+    RequestContextService.setOrderId(created.id);
+
     // Sincroniza atômica e assincronamente os saldos com marketplaces integrados (Mercado Livre, Shopee e Amazon)
     if (this.meliSync || this.shopeeSync || this.amazonSync) {
       for (const item of created.items) {
@@ -647,6 +651,7 @@ export class OrdersService {
   }
 
   async cancel(user: AuthenticatedUser, id: string) {
+    RequestContextService.setOrderId(id);
     const canReadAll = user.permissions.has(PERMISSIONS.ORDERS_READ);
     const canCancelAny = user.permissions.has(PERMISSIONS.ORDERS_CANCEL);
 
@@ -719,6 +724,7 @@ export class OrdersService {
    * refunding is a back-office action, like ship and deliver.
    */
   async refund(id: string, viewer?: AuthenticatedUser) {
+    RequestContextService.setOrderId(id);
     const order = await this.prisma.order.findUnique({ where: { id } });
 
     if (!order) {
@@ -1145,6 +1151,7 @@ export class OrdersService {
     // Absent for the payment webhook, which drives markPaid with no caller.
     viewer?: AuthenticatedUser,
   ) {
+    RequestContextService.setOrderId(id);
     const { count } = await this.prisma.order.updateMany({
       where: { id, status: from },
       data: { status: to, [stamp]: new Date(), ...extra },

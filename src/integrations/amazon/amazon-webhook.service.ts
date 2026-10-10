@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { StockService } from '../../catalog/stock.service';
 import { ERP_SERVICE, type ErpService } from '../../erp/erp-service';
 import { OrderStatus } from '../../generated/prisma/enums';
+import { RequestContextService } from '../../observability/request-context.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MercadoLivreSyncService } from '../mercadolivre/mercadolivre-sync.service';
 import { ShopeeSyncService } from '../shopee/shopee-sync.service';
@@ -40,6 +41,7 @@ export class AmazonWebhookService {
     payload: Record<string, unknown>,
     tenantId = 'default',
   ): Promise<AmazonWebhookProcessResult> {
+    RequestContextService.setTenantId(tenantId);
     const notificationType =
       (payload.NotificationType as string | undefined) ??
       (payload.notificationType as string | undefined) ??
@@ -85,6 +87,7 @@ export class AmazonWebhookService {
     });
 
     if (existingOrder) {
+      RequestContextService.setOrderId(existingOrder.id);
       this.logger.log(
         `Pedido Amazon ${amazonOrder.AmazonOrderId} já importado localmente (Order ID: ${existingOrder.id}).`,
       );
@@ -279,6 +282,8 @@ export class AmazonWebhookService {
         },
       });
     });
+
+    RequestContextService.setOrderId(createdOrder.id);
 
     this.logger.log(
       `Pedido Amazon ${amazonOrderId} importado com sucesso (Order ID local: ${createdOrder.id}). PII cifrada com AES-256-GCM.`,
